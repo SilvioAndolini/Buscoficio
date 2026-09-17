@@ -127,7 +127,7 @@ Fuera de alcance (Fases 2–7): fuentes reales, L3/embeddings, matching, IA/prov
 - `pnpm test:e2e` ✓ (Playwright UI smoke 2/2; API+worker+web+DB+Redis reales)
 - `pnpm turbo build` ✓ (14/14; tsup api/worker + next build)
 - Docker Compose dev: `up --build --wait` ✓; `/healthz` y `/readyz` OK; worker `ready`; migración automática; flujo E2E manual vía API (7 jobs nuevos, 2 duplicados, 1 rechazado) ✓
-- Commits: 14 pequeños y coherentes.
+- Commits pequeños y coherentes (ver `git log --oneline`).
 
 Desviaciones registradas en el reporte de Fase 1 (paquete `packages/storage`, `UnauthorizedError`,
 rewrites de Next con API_URL de build, `output: standalone` deshabilitado en Windows).
