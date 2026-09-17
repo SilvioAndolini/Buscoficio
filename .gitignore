@@ -25,5 +25,14 @@ test-results/
 # OS
 .DS_Store
 Thumbs.db
+
 # TS incremental builds
 *.tsbuildinfo
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.history/
+*~
