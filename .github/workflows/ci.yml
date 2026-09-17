@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: job
+          POSTGRES_PASSWORD: job
+          POSTGRES_DB: job_system_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U job -d job_system_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://job:job@localhost:5432/job_system_test
+      TEST_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (+ architecture boundaries)
+        run: pnpm turbo lint
+
+      - name: Typecheck
+        run: pnpm turbo typecheck
+
+      - name: Tests (unit + integration against real Postgres/Redis)
+        run: pnpm turbo test --concurrency=1
+
+      - name: Migrations from an empty database
+        run: |
+          PGPASSWORD=job psql -h localhost -U job -d postgres \
+            -c "DROP DATABASE IF EXISTS ci_migrations_check;" \
+            -c "CREATE DATABASE ci_migrations_check;"
+          DATABASE_URL=postgres://job:job@localhost:5432/ci_migrations_check \
+            pnpm --filter @job-system/database db:migrate
+
+      - name: Build
+        run: pnpm turbo build
+
+      - name: Secret scanning
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+
+      - name: Dependency audit (non-blocking)
+        run: pnpm audit --prod --audit-level high
+        continue-on-error: true

@@ -1,0 +1,105 @@
+name: job-system
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: job
+      POSTGRES_PASSWORD: job
+      POSTGRES_DB: job_system
+    ports:
+      - '5432:5432'
+    volumes:
+      - job-system-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U job -d job_system']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ['pnpm', '--filter', '@job-system/database', 'db:migrate']
+    environment:
+      DATABASE_URL: postgres://job:job@postgres:5432/job_system
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ['pnpm', '--filter', '@job-system/api', 'start']
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://job:job@postgres:5432/job_system
+      REDIS_URL: redis://redis:6379
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-0f694fc3267fd0e17454bbe6dd6b4e163a41519495539195fd1567b476a15d75}
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me-please-32}
+      AUTH_COOKIE_SECURE: 'false'
+      DRY_RUN: 'true'
+      AUTO_APPLY_ENABLED: 'false'
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_DIR: /app/.data/storage
+      LOG_LEVEL: info
+    ports:
+      - '3001:3001'
+    volumes:
+      - job-system-storage:/app/.data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ['pnpm', '--filter', '@job-system/worker', 'start']
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://job:job@postgres:5432/job_system
+      REDIS_URL: redis://redis:6379
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-0f694fc3267fd0e17454bbe6dd6b4e163a41519495539195fd1567b476a15d75}
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me-please-32}
+      DRY_RUN: 'true'
+      AUTO_APPLY_ENABLED: 'false'
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+volumes:
+  job-system-pgdata:
+  job-system-storage:
+
+networks:
+  internal:
+    driver: bridge
