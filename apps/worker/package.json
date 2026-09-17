@@ -1,0 +1,35 @@
+{
+  "name": "@job-system/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "smoke": "tsx src/scripts/smoke.ts",
+    "lint": "eslint --config ../../eslint.config.mjs src test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@job-system/core": "workspace:*",
+    "@job-system/database": "workspace:*",
+    "@job-system/job-sources": "workspace:*",
+    "@job-system/observability": "workspace:*",
+    "@job-system/shared": "workspace:*",
+    "bullmq": "^5.34.0",
+    "drizzle-orm": "^0.38.3",
+    "ioredis": "^5.4.2",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2"
+  }
+}
