@@ -1,7 +1,7 @@
 # Plan de implementación — Fase 1: Foundation
 
 > Fuente de verdad: `/documentos` (arquitectura aprobada tras Fase 0.1). Este plan no rediseña; ejecuta.
-> Estado: en ejecución. Fecha: 2026-09-17.
+> Estado: **completado** (2026-09-17). Verificación final al pie del documento. Fecha de inicio: 2026-09-17.
 
 ## Alcance
 
@@ -116,3 +116,18 @@ Fuera de alcance (Fases 2–7): fuentes reales, L3/embeddings, matching, IA/prov
 | pnpm sin shim global (EPERM en corepack) | pnpm 9.15.4 instalado vía npm global |
 | Bundling `pg`/drizzle con tsup | Mantener deps externas (default) y bundlear sólo `@job-system/*` |
 | Paralelismo de tests contra una única DB | Vitest `fileParallelism: false` + truncate entre tests |
+
+## Resultado de la ejecución (2026-09-17)
+
+- `pnpm install --frozen-lockfile` ✓
+- `pnpm turbo lint` ✓ (15/15, incluye `arch check: OK` con self-test)
+- `pnpm turbo typecheck` ✓ (21/21)
+- `pnpm turbo test` (sin infra) ✓ (unit; integración omitida explícitamente)
+- `pnpm test:integration` ✓ (74/74 tests con Postgres y Redis reales; migraciones desde DB vacía incluidas)
+- `pnpm test:e2e` ✓ (Playwright UI smoke 2/2; API+worker+web+DB+Redis reales)
+- `pnpm turbo build` ✓ (14/14; tsup api/worker + next build)
+- Docker Compose dev: `up --build --wait` ✓; `/healthz` y `/readyz` OK; worker `ready`; migración automática; flujo E2E manual vía API (7 jobs nuevos, 2 duplicados, 1 rechazado) ✓
+- Commits: 14 pequeños y coherentes.
+
+Desviaciones registradas en el reporte de Fase 1 (paquete `packages/storage`, `UnauthorizedError`,
+rewrites de Next con API_URL de build, `output: standalone` deshabilitado en Windows).
