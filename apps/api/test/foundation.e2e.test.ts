@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sha256Hex } from '@job-system/core';
 import type { Env } from '@job-system/shared';
 import { createLogger } from '@job-system/observability';
 import type { DbHandle } from '@job-system/database';
@@ -19,7 +20,8 @@ const hasInfrastructure = TEST_DATABASE_URL.length > 0 && TEST_REDIS_URL.length 
 const describeE2e = hasInfrastructure ? describe : describe.skip;
 
 const PASSWORD = 'correct-horse-battery-staple';
-const PASSWORD_HASH = '87cbebfeebc05f7c54ac9336c4b4bbec831227a641951a4bde7edd56020f8590';
+// Derived at runtime so no secret-like literal lives in the repository.
+const PASSWORD_HASH = sha256Hex(PASSWORD);
 
 function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): Env {
   return {
