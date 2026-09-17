@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+.next/
+.turbo/
+coverage/
+
+# Local data (storage, uploads)
+.data/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+Thumbs.db

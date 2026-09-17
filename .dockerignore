@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/.data
+docs
+test-results
+playwright-report
+.git
+*.log
