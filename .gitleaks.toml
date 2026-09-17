@@ -1,0 +1,19 @@
+# gitleaks configuration — default rules + a narrowly scoped allowlist.
+#
+# Policy (AGENTS.md): automated tests use fictitious data exclusively; they never
+# contain real credentials. Test fixtures may include fake password hashes or
+# dummy tokens, which the default `generic-api-key` rule flags as false positives.
+#
+# This allowlist is limited to test directories. Everything else (source, docs,
+# Docker, CI, environment examples) is scanned with the full default ruleset.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake credentials/hashes in automated test fixtures (no real secrets)"
+paths = [
+  '''apps/api/test/''',
+  '''apps/worker/test/''',
+  '''packages/[^/]+/test/''',
+]

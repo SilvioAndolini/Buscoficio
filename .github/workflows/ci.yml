@@ -40,6 +40,8 @@ jobs:
       TEST_REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -73,11 +75,15 @@ jobs:
       - name: Build
         run: pnpm turbo build
 
-      - name: Secret scanning
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: 'false'
+      - name: Secret scanning (gitleaks, full history)
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/repo \
+            zricethezav/gitleaks:v8.30.1 detect \
+            --source=/repo --config=/repo/.gitleaks.toml --redact -v --exit-code=2 --log-opts="--all"
 
       - name: Dependency audit (non-blocking)
         run: pnpm audit --prod --audit-level high
