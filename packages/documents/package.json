@@ -1,0 +1,19 @@
+{
+  "name": "@job-system/documents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.config.mjs src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@job-system/core": "workspace:*",
+    "@job-system/shared": "workspace:*"
+  }
+}
