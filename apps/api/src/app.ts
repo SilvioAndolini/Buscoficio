@@ -83,7 +83,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
         void reply.status(statusCode).send({
           code: 'VALIDATION_ERROR',
-          message: error.message,
+          message: error instanceof Error ? error.message : 'Request error',
           correlationId: request.id,
         });
         return;
