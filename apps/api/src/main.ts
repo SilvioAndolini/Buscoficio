@@ -3,7 +3,7 @@ import { createLogger } from '@job-system/observability';
 import { createDb } from '@job-system/database';
 import { LocalStorageAdapter } from '@job-system/storage';
 import { buildApp } from './app.js';
-import { createMaintenanceQueue, createSearchQueue } from './search-queue.js';
+import { createMaintenanceQueue, createMatchQueue, createSearchQueue } from './search-queue.js';
 import { createRedisConnection } from './redis.js';
 
 const env = loadEnv();
@@ -12,10 +12,20 @@ const logger = createLogger({ level: env.LOG_LEVEL });
 const dbHandle = createDb(env.DATABASE_URL);
 const redis = createRedisConnection(env.REDIS_URL);
 const searchQueue = createSearchQueue(redis);
+const matchQueue = createMatchQueue(redis);
 const maintenanceQueue = createMaintenanceQueue(redis);
 const storage = new LocalStorageAdapter(env.STORAGE_LOCAL_DIR);
 
-const app = await buildApp({ env, logger, dbHandle, redis, storage, searchQueue, maintenanceQueue });
+const app = await buildApp({
+  env,
+  logger,
+  dbHandle,
+  redis,
+  storage,
+  searchQueue,
+  matchQueue,
+  maintenanceQueue,
+});
 await app.listen({ host: env.API_HOST, port: env.API_PORT });
 logger.info({ host: env.API_HOST, port: env.API_PORT, dryRun: env.DRY_RUN }, 'api ready');
 
@@ -28,6 +38,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await app.close();
     await searchQueue.close();
+    await matchQueue.close();
     await maintenanceQueue.close();
     await redis.quit();
     await dbHandle.pool.end();

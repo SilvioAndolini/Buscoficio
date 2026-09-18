@@ -15,11 +15,13 @@ import {
   createCandidateRepo,
   createDedupRepo,
   createJobRepo,
+  createMatchingRepo,
   createResumeRepo,
   createSearchRepo,
   createStatsRepo,
   type DbHandle,
 } from '@job-system/database';
+import { ENGINE_VERSION } from '@job-system/matching';
 import type { Logger } from '@job-system/observability';
 import type { Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
@@ -35,6 +37,7 @@ import { registerSourceRoutes } from './routes/sources.js';
 import { registerApplicationTargetRoutes } from './routes/application-targets.js';
 import { registerDedupRoutes } from './routes/dedup.js';
 import { registerStatsRoutes } from './routes/stats.js';
+import { registerMatchRoutes } from './routes/matches.js';
 
 export interface AppDeps {
   env: Env;
@@ -43,6 +46,7 @@ export interface AppDeps {
   redis: IORedis;
   storage: StoragePort;
   searchQueue: Queue;
+  matchQueue: Queue;
   maintenanceQueue: Queue;
   clock?: Clock;
 }
@@ -65,7 +69,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     redis: deps.redis,
     storage: deps.storage,
     searchQueue: deps.searchQueue,
+    matchQueue: deps.matchQueue,
     maintenanceQueue: deps.maintenanceQueue,
+    engineVersion: ENGINE_VERSION,
     clock: deps.clock ?? systemClock,
     repos: {
       candidate: createCandidateRepo(deps.dbHandle.db),
@@ -75,6 +81,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       audit: createAuditRepo(deps.dbHandle.db),
       dedup: createDedupRepo(deps.dbHandle.db),
       stats: createStatsRepo(deps.dbHandle.db),
+      matching: createMatchingRepo(deps.dbHandle.db),
     },
   };
 
@@ -125,6 +132,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerApplicationTargetRoutes(app, ctx);
   registerDedupRoutes(app, ctx);
   registerStatsRoutes(app, ctx);
+  registerMatchRoutes(app, ctx);
 
   return app;
 }

@@ -9,7 +9,7 @@ import { sha256Hex } from '@job-system/core';
 import type { Env } from '@job-system/shared';
 import { createLogger } from '@job-system/observability';
 import type { DbHandle } from '@job-system/database';
-import { createAuditRepo } from '@job-system/database';
+import { createAuditRepo, createMatchingRepo } from '@job-system/database';
 import { createTestDb, truncateAll } from '@job-system/database/testing';
 import { LocalStorageAdapter } from '@job-system/storage';
 import {
@@ -20,7 +20,7 @@ import {
 } from '@job-system/job-sources';
 import { startWorkerRuntime, type WorkerRuntime } from '@job-system/worker';
 import { buildApp } from '../src/app.js';
-import { createMaintenanceQueue, createSearchQueue } from '../src/search-queue.js';
+import { createMaintenanceQueue, createMatchQueue, createSearchQueue } from '../src/search-queue.js';
 import { createRedisConnection } from '../src/redis.js';
 
 const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? '';
@@ -57,6 +57,8 @@ function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): En
     // manual runs for determinism (no background runs mid-test).
     SCHEDULER_ENABLED: false,
     TARGET_ENRICHMENT_MAX_PER_RUN: 25,
+    EMBEDDING_DIMENSIONS: 1536,
+    EMBEDDING_SPACE_VERSION: 'v1',
   };
 }
 
@@ -156,6 +158,7 @@ let app: FastifyInstance;
 let runtime: WorkerRuntime;
 let queue: ReturnType<typeof createSearchQueue>;
 let maintenanceQueue: ReturnType<typeof createMaintenanceQueue>;
+let matchQueue: ReturnType<typeof createMatchQueue>;
 let redis: ReturnType<typeof createRedisConnection>;
 let storageDir: string;
 let fixtureServer: Server;
@@ -194,6 +197,7 @@ beforeAll(async () => {
   });
   redis = createRedisConnection(TEST_REDIS_URL);
   queue = createSearchQueue(redis, QUEUE_PREFIX);
+  matchQueue = createMatchQueue(redis, QUEUE_PREFIX);
   maintenanceQueue = createMaintenanceQueue(redis, QUEUE_PREFIX);
   const storage = new LocalStorageAdapter(storageDir);
   app = await buildApp({
@@ -203,6 +207,7 @@ beforeAll(async () => {
     redis,
     storage,
     searchQueue: queue,
+    matchQueue,
     maintenanceQueue,
   });
   await app.ready();
@@ -211,6 +216,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close();
   await queue.close();
+  await matchQueue.close();
   await maintenanceQueue.close();
   await redis.quit();
   await runtime.close();
@@ -222,6 +228,16 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(handle.db);
   cookie = '';
+  // The worker bootstraps the active space once at startup; truncation between
+  // tests removes it, so the same deterministic bootstrap runs again here.
+  await createMatchingRepo(handle.db).ensureEmbeddingSpace({
+    key: 'mock-deterministic-v1-1536-v1',
+    provider: 'mock',
+    model: 'mock-deterministic-v1',
+    dimensions: 1536,
+    distanceMetric: 'cosine',
+    version: 'v1',
+  });
 });
 
 describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
@@ -391,7 +407,117 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     };
     expect(detail.listings.length).toBeGreaterThanOrEqual(2);
     expect(detail.applicationTarget?.key).toBe('greenhouse');
-  });
+
+    // 6. Phase 3: discovery auto-enqueued matching; ranking is ordered by score.
+    interface MatchItem {
+      match: {
+        id: string;
+        overallScore: string;
+        isCurrent: boolean;
+        reasons: string[];
+        missingRequirements: string[];
+        scoreBreakdown: { signals: Record<string, { present: boolean }> };
+      };
+      job: { id: string; title: string };
+      recommendedResume: { id: string; name: string } | null;
+    }
+    async function loadMatches(): Promise<MatchItem[]> {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/v1/matches?limit=100',
+          headers: withCookie(),
+        });
+        expect(response.statusCode).toBe(200);
+        const body = response.json() as { items: MatchItem[]; total: number };
+        if (body.items.length >= 7) return body.items;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+      }
+      throw new Error('Timed out waiting for current matches');
+    }
+    const matches = await loadMatches();
+    expect(matches.length).toBe(7);
+    for (let index = 1; index < matches.length; index += 1) {
+      expect(Number(matches[index - 1]!.match.overallScore)).toBeGreaterThanOrEqual(
+        Number(matches[index]!.match.overallScore),
+      );
+    }
+    for (const item of matches) {
+      expect(item.match.isCurrent).toBe(true);
+      expect(item.match.reasons.length).toBeGreaterThan(0);
+      expect(Object.keys(item.match.scoreBreakdown.signals)).toHaveLength(8);
+    }
+
+    const best = matches[0]!;
+    const currentResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/jobs/${best.job.id}/match`,
+      headers: withCookie(),
+    });
+    expect(currentResponse.statusCode).toBe(200);
+    const current = currentResponse.json() as { match: { id: string } };
+    expect(current.match.id).toBe(best.match.id);
+
+    // 7. Recompute is idempotent for the same identity (same row, no duplicate).
+    const enqueueResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/jobs/${best.job.id}/match`,
+      headers: withCookie(),
+    });
+    expect(enqueueResponse.statusCode).toBe(202);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
+    const historyAfterRecompute = await app.inject({
+      method: 'GET',
+      url: `/v1/jobs/${best.job.id}/matches`,
+      headers: withCookie(),
+    });
+    expect((historyAfterRecompute.json() as { items: unknown[] }).items).toHaveLength(1);
+
+    // 8. Changing a relevant profile field produces a new current match and
+    //    keeps the previous one as history.
+    const addSkillResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/profile/skills',
+      headers: withCookie(),
+      payload: { skillName: 'Kubernetes', level: 'advanced', years: 3 },
+    });
+    expect(addSkillResponse.statusCode).toBe(201);
+    await app.inject({
+      method: 'POST',
+      url: `/v1/jobs/${best.job.id}/match`,
+      headers: withCookie(),
+    });
+    let history: Array<{ id: string; isCurrent: boolean }> = [];
+    const historyDeadline = Date.now() + 30_000;
+    while (Date.now() < historyDeadline) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/v1/jobs/${best.job.id}/matches`,
+        headers: withCookie(),
+      });
+      history = (response.json() as { items: Array<{ id: string; isCurrent: boolean }> }).items;
+      if (history.length === 2) break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+    expect(history).toHaveLength(2);
+    expect(history.filter((row) => row.isCurrent)).toHaveLength(1);
+    expect(history[0]!.isCurrent).toBe(true);
+    expect(history[0]!.id).not.toBe(best.match.id);
+
+    // 9. Embedding spaces are exposed; exactly one is active.
+    const spacesResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/embedding-spaces',
+      headers: withCookie(),
+    });
+    expect(spacesResponse.statusCode).toBe(200);
+    const spaces = (spacesResponse.json() as { items: Array<{ status: string; provider: string }> })
+      .items;
+    expect(spaces.length).toBeGreaterThanOrEqual(1);
+    expect(spaces.filter((space) => space.status === 'active')).toHaveLength(1);
+    expect(spaces[0]!.provider).toBe('mock');
+  }, 120_000);
 
   it('is idempotent across two runs (no duplicate jobs)', async () => {
     await login();
@@ -650,5 +776,5 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     const sourceRows = (sourcesResponse.json() as { items: Array<{ key: string; policyNotes: string | null }> }).items;
     const remoteok = sourceRows.find((row) => row.key === 'remoteok');
     expect(remoteok?.policyNotes).toContain('reviewed:');
-  });
+  }, 90_000);
 });

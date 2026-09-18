@@ -14,6 +14,7 @@ import type {
   createCandidateRepo,
   createDedupRepo,
   createJobRepo,
+  createMatchingRepo,
   createResumeRepo,
   createSearchRepo,
   createStatsRepo,
@@ -29,6 +30,7 @@ export interface ApiRepos {
   audit: ReturnType<typeof createAuditRepo>;
   dedup: ReturnType<typeof createDedupRepo>;
   stats: ReturnType<typeof createStatsRepo>;
+  matching: ReturnType<typeof createMatchingRepo>;
 }
 
 export interface ApiCtx {
@@ -39,7 +41,10 @@ export interface ApiCtx {
   redis: IORedis;
   storage: StoragePort;
   searchQueue: Queue;
+  matchQueue: Queue;
   maintenanceQueue: Queue;
+  /** Deterministic engine version used in BullMQ match job ids. */
+  engineVersion: string;
   clock: Clock;
   repos: ApiRepos;
 }

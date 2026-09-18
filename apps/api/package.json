@@ -20,6 +20,7 @@
     "@fastify/multipart": "^9.0.3",
     "@job-system/core": "workspace:*",
     "@job-system/database": "workspace:*",
+    "@job-system/matching": "workspace:*",
     "@job-system/observability": "workspace:*",
     "@job-system/shared": "workspace:*",
     "@job-system/storage": "workspace:*",
