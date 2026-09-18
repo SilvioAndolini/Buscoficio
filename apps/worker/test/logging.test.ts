@@ -49,6 +49,8 @@ const testEnv: Env = {
   WATCHDOG_TIMEOUT_MS: 900_000,
   SCHEDULER_ENABLED: true,
   TARGET_ENRICHMENT_MAX_PER_RUN: 25,
+  EMBEDDING_DIMENSIONS: 1536,
+  EMBEDDING_SPACE_VERSION: 'v1',
 };
 
 const logLines: string[] = [];

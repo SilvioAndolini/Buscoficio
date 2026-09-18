@@ -1,11 +1,15 @@
 import { Worker, type Job, type WorkerOptions } from 'bullmq';
-import type { Env } from '@job-system/shared';
+import { ConfigError, slugify, type Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
 import { systemClock, type HttpClient, type JobSourceAdapter } from '@job-system/core';
 import {
+  VECTOR_DIMENSIONS,
+  createAiUsageRepo,
+  createCandidateRepo,
   createDb,
   createDedupRepo,
   createJobRepo,
+  createMatchingRepo,
   createSearchRepo,
   type DbHandle,
 } from '@job-system/database';
@@ -16,6 +20,8 @@ import {
   createMockJobSource,
   createRealSourceAdapters,
 } from '@job-system/job-sources';
+import { createEmbeddingProvider } from '@job-system/ai';
+import { ENGINE_VERSION } from '@job-system/matching';
 import { createJobLogger, type Logger } from '@job-system/observability';
 import { WORKER_QUEUES, createQueues, createRedisConnection, type WorkerQueue } from './queues.js';
 import { createIngestService } from './services/ingest-service.js';
@@ -24,6 +30,7 @@ import { createRedisRateLimiter } from './services/rate-limiter.js';
 import { createTargetEnrichmentService } from './services/target-enrichment-service.js';
 import { createSchedulerService } from './services/scheduler-service.js';
 import { createReconciliationService } from './services/reconciliation-service.js';
+import { createMatchingService } from './services/matching-service.js';
 import { createJobHandlers, type JobHandlers } from './handlers.js';
 
 export interface WorkerRuntimeOptions {
@@ -57,6 +64,42 @@ export async function startWorkerRuntime(
   const jobRepo = createJobRepo(db.db);
   const searchRepo = createSearchRepo(db.db);
   const dedupRepo = createDedupRepo(db.db);
+  const candidateRepo = createCandidateRepo(db.db);
+  const matchingRepo = createMatchingRepo(db.db);
+  const aiUsageRepo = createAiUsageRepo(db.db);
+
+  // Phase 3 embeddings: fixed vector(1536) column; a different dimension
+  // requires the ADR-018 parallel-table migration (not Phase 3 scope).
+  if (env.EMBEDDING_DIMENSIONS !== VECTOR_DIMENSIONS) {
+    throw new ConfigError([
+      `EMBEDDING_DIMENSIONS must be ${VECTOR_DIMENSIONS} in Phase 3 (pgvector column is fixed); got ${env.EMBEDDING_DIMENSIONS}`,
+    ]);
+  }
+  const embeddingModel =
+    env.EMBEDDING_MODEL ??
+    (env.AI_PROVIDER === 'mock' ? 'mock-deterministic-v1' : undefined);
+  if (embeddingModel === undefined) {
+    throw new ConfigError([
+      `EMBEDDING_MODEL is required when AI_PROVIDER=${env.AI_PROVIDER}`,
+    ]);
+  }
+  const embeddingProvider = createEmbeddingProvider({
+    provider: env.AI_PROVIDER,
+    model: embeddingModel,
+    dimensions: env.EMBEDDING_DIMENSIONS,
+    apiKey: env.OPENAI_API_KEY,
+    baseUrl: env.EMBEDDING_BASE_URL,
+  });
+  await matchingRepo.ensureEmbeddingSpace({
+    key: slugify(
+      `${embeddingProvider.provider}-${embeddingProvider.model}-${embeddingProvider.dimensions}-${env.EMBEDDING_SPACE_VERSION}`,
+    ),
+    provider: embeddingProvider.provider,
+    model: embeddingProvider.model,
+    dimensions: embeddingProvider.dimensions,
+    distanceMetric: 'cosine',
+    version: env.EMBEDDING_SPACE_VERSION,
+  });
 
   const registry = new SourceRegistry();
   const adapters = options.adapters ?? [createMockJobSource(), ...createRealSourceAdapters()];
@@ -79,6 +122,7 @@ export async function startWorkerRuntime(
   const rateLimiterRedis = createRedisConnection(env.REDIS_URL);
   const rateLimiter = createRedisRateLimiter(rateLimiterRedis, logger, {
     ...(options.rateLimitWindowMs === undefined ? {} : { windowMs: options.rateLimitWindowMs }),
+    ...(options.queuePrefix === undefined ? {} : { keyPrefix: options.queuePrefix }),
   });
   const thresholds = {
     high: env.DEDUP_L3_HIGH_THRESHOLD,
@@ -114,6 +158,13 @@ export async function startWorkerRuntime(
     logger,
     timeoutMs: env.WATCHDOG_TIMEOUT_MS,
   });
+  const matchingService = createMatchingService({
+    matchingRepo,
+    aiUsageRepo,
+    embeddingProvider,
+    clock: systemClock,
+    logger,
+  });
 
   const handlers = createJobHandlers({
     queues,
@@ -122,6 +173,9 @@ export async function startWorkerRuntime(
     schedulerService,
     reconciliationService,
     dedupRepo,
+    candidateRepo,
+    matchingService,
+    engineVersion: ENGINE_VERSION,
     logger,
   });
 

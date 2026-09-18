@@ -114,6 +114,8 @@ export function createIngestService(deps: IngestServiceDeps) {
         currency: normalized.currency,
         experienceLevel: normalized.experienceLevel,
         languageRequirements: normalized.languageRequirements,
+        requiredSkills: [],
+        preferredSkills: [],
       }),
       discoveredAt: deps.clock.now(),
       raw: raw.data,

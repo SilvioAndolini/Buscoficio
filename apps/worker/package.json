@@ -16,9 +16,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@job-system/ai": "workspace:*",
     "@job-system/core": "workspace:*",
     "@job-system/database": "workspace:*",
     "@job-system/job-sources": "workspace:*",
+    "@job-system/matching": "workspace:*",
     "@job-system/observability": "workspace:*",
     "@job-system/shared": "workspace:*",
     "bullmq": "^5.34.0",

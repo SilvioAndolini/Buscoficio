@@ -39,6 +39,8 @@ export interface SourceRunOutcome extends SourceCounters {
   status: 'completed' | 'failed' | 'skipped';
   errorClass?: string;
   reviewIds: string[];
+  /** Jobs created by this run (matching is enqueued by the handler). */
+  newJobIds: string[];
 }
 
 export interface RunSourceOptions {
@@ -149,6 +151,7 @@ export function createSearchService(deps: SearchServiceDeps) {
       const startedAt = Date.now();
       const counters: SourceCounters = { discovered: 0, new: 0, duplicated: 0, rejected: 0, errors: 0 };
       const reviewIds: string[] = [];
+      const newJobIds: string[] = [];
 
       try {
         let page = 1;
@@ -173,8 +176,10 @@ export function createSearchService(deps: SearchServiceDeps) {
               sourceLogger,
             );
             if (ingestResult.reviewId) reviewIds.push(ingestResult.reviewId);
-            if (ingestResult.outcome === 'new') counters.new += 1;
-            else if (ingestResult.outcome === 'rejected') counters.rejected += 1;
+            if (ingestResult.outcome === 'new') {
+              counters.new += 1;
+              if (ingestResult.jobId !== null) newJobIds.push(ingestResult.jobId);
+            } else if (ingestResult.outcome === 'rejected') counters.rejected += 1;
             else counters.duplicated += 1;
           }
           hasMore = result.hasMore;
@@ -201,7 +206,7 @@ export function createSearchService(deps: SearchServiceDeps) {
           errors: 0,
           durationMs: Date.now() - startedAt,
         });
-        return { sourceKey: input.sourceKey, status: 'completed', reviewIds, ...counters };
+        return { sourceKey: input.sourceKey, status: 'completed', reviewIds, newJobIds, ...counters };
       } catch (error) {
         const retryable = isAppError(error) && error.retryable;
         if (error instanceof RateLimitedError) {
@@ -240,7 +245,7 @@ export function createSearchService(deps: SearchServiceDeps) {
           { searchRunId: input.searchRunId, errorClass, attempt: options.attempt },
           'source run failed',
         );
-        return { sourceKey: input.sourceKey, status: 'failed', errorClass, reviewIds, ...counters };
+        return { sourceKey: input.sourceKey, status: 'failed', errorClass, reviewIds, newJobIds, ...counters };
       }
     },
   };

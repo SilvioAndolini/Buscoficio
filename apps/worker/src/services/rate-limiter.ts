@@ -4,6 +4,8 @@ import type { Logger } from '@job-system/observability';
 export interface RateLimiterOptions {
   /** Window size; overridable for fast tests. */
   windowMs?: number;
+  /** Isolates buckets between test runs / environments (Redis key prefix). */
+  keyPrefix?: string;
 }
 
 export interface RateLimitAcquireResult {
@@ -38,6 +40,7 @@ export function createRedisRateLimiter(
   options: RateLimiterOptions = {},
 ): RateLimiter {
   const windowMs = options.windowMs ?? 60_000;
+  const keyPrefix = options.keyPrefix === undefined ? '' : `${options.keyPrefix}:`;
   const maxWaitMs = Math.max(windowMs, 65_000);
 
   const sleep = async (ms: number): Promise<void> => {
@@ -51,7 +54,7 @@ export function createRedisRateLimiter(
       let waitedMs = 0;
 
       for (;;) {
-        const blockedTtl = await redis.pttl(`rate:blocked:${bucket}`);
+        const blockedTtl = await redis.pttl(`${keyPrefix}rate:blocked:${bucket}`);
         if (blockedTtl > 0) {
           const wait = Math.min(blockedTtl, maxWaitMs);
           await sleep(wait);
@@ -60,7 +63,7 @@ export function createRedisRateLimiter(
         }
 
         const window = Math.floor(Date.now() / windowMs);
-        const key = `rate:${bucket}:${window}`;
+        const key = `${keyPrefix}rate:${bucket}:${window}`;
         const count = await redis.incr(key);
         if (count === 1) await redis.pexpire(key, windowMs * 2);
 
@@ -82,7 +85,7 @@ export function createRedisRateLimiter(
     async penalize(sourceKey, operation, retryAfterMs, scopedLogger): Promise<void> {
       const log = scopedLogger ?? logger;
       const ms = Math.min(Math.max(1000, retryAfterMs ?? 60_000), 15 * 60_000);
-      await redis.set(`rate:blocked:${sourceKey}:${operation}`, '1', 'PX', ms);
+      await redis.set(`${keyPrefix}rate:blocked:${sourceKey}:${operation}`, '1', 'PX', ms);
       await redis.incr('rate:limit:blocked:total');
       log.warn({ sourceKey, operation, retryAfterMs: ms }, 'external rate limit penalty applied');
     },

@@ -1,12 +1,13 @@
 import type { Job, Queue } from 'bullmq';
-import { uuidv7 } from '@job-system/shared';
+import { matchJobId, uuidv7 } from '@job-system/shared';
 import type { Logger } from '@job-system/observability';
 import type { SearchService } from './services/search-service.js';
 import type { SchedulerService } from './services/scheduler-service.js';
 import type { ReconciliationService } from './services/reconciliation-service.js';
-import type { createDedupRepo, createSearchRepo } from '@job-system/database';
+import type { MatchingService } from './services/matching-service.js';
+import type { createCandidateRepo, createDedupRepo, createSearchRepo } from '@job-system/database';
 import type { WorkerQueue } from './queues.js';
-import { QUEUE_DEDUP_REVIEW, ingestSourceJobId } from './queues.js';
+import { QUEUE_DEDUP_REVIEW, QUEUE_MATCH, ingestSourceJobId } from './queues.js';
 
 export interface JobHandlerDeps {
   queues: Record<WorkerQueue, Queue>;
@@ -15,6 +16,10 @@ export interface JobHandlerDeps {
   schedulerService: SchedulerService;
   reconciliationService: ReconciliationService;
   dedupRepo: ReturnType<typeof createDedupRepo>;
+  candidateRepo: ReturnType<typeof createCandidateRepo>;
+  matchingService: MatchingService;
+  /** Part of the deterministic BullMQ job id for matching (`match-<job>-<v>`). */
+  engineVersion: string;
   logger: Logger;
 }
 
@@ -103,12 +108,57 @@ export function createJobHandlers(deps: JobHandlerDeps) {
         );
       }
 
+      // Phase 3: decoupled matching enqueue. Discovery must keep working if
+      // matching is unavailable; failures here never revert the ingested Job.
+      if (outcome.newJobIds.length > 0) {
+        const profile = await deps.candidateRepo.getProfile();
+        if (profile) {
+          for (const jobId of outcome.newJobIds) {
+            try {
+              await deps.queues[QUEUE_MATCH].add(
+                'match.score',
+                { jobId, candidateId: profile.id, correlationId },
+                {
+                  jobId: matchJobId(jobId, deps.engineVersion),
+                  attempts: 3,
+                  backoff: { type: 'exponential', delay: 3_000 },
+                  // Free the deterministic id after completion so later
+                  // recomputation is never blocked (Postgres constraints are
+                  // the real idempotency defense).
+                  removeOnComplete: true,
+                },
+              );
+            } catch (error) {
+              logger.warn(
+                { jobId, err: error },
+                'matching enqueue failed; discovery result kept',
+              );
+            }
+          }
+        }
+      }
+
       await deps.queues.search.add(
         'search.finalize',
         { searchRunId, correlationId },
         { attempts: 1 },
       );
       return outcome;
+    },
+
+    'match.score': async (job: Job, logger: Logger) => {
+      const jobId = readString(job.data, 'jobId');
+      const candidateId = readString(job.data, 'candidateId');
+      const correlationId = readCorrelationId(job);
+      return deps.matchingService.score(
+        jobId,
+        candidateId,
+        {
+          correlationId,
+          ...(job.id === undefined ? {} : { jobId: job.id }),
+        },
+        logger,
+      );
     },
 
     'dedup.review.signal': async (job: Job, logger: Logger) => {
