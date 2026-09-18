@@ -1,6 +1,7 @@
 import {
   AiError,
   computeJobContentHash,
+  embeddingRuntimeMatchesSpace,
   type Clock,
   type EmbeddingProvider,
   type TraceContext,
@@ -49,9 +50,13 @@ export interface MatchRef {
   embeddingSpaceId: string | null;
   engineVersion: string;
   weightsVersion: string;
+  matchingAsOfDate: string | null;
 }
 
-const VECTOR_COLUMN_DIMENSIONS = 1536;
+/** UTC date-only anchor (no time component) derived from the injected Clock. */
+function utcDateOnly(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
 
 export function createMatchingService(deps: MatchingServiceDeps) {
   const policy = deps.policy ?? DEFAULT_MATCH_POLICY;
@@ -190,16 +195,35 @@ export function createMatchingService(deps: MatchingServiceDeps) {
     );
 
     const space = await deps.matchingRepo.getActiveEmbeddingSpace();
-    if (space && space.dimensions !== deps.embeddingProvider.dimensions) {
-      throw new AiError(
-        `Embedding space '${space.key}' expects ${space.dimensions} dimensions but provider '${deps.embeddingProvider.model}' produces ${deps.embeddingProvider.dimensions}`,
-      );
+    if (space) {
+      // Strict binding: a vector written into a space MUST come from the same
+      // provider+model+dimensions the space declares. Fail closed BEFORE any
+      // cache lookup, embed() call or write (never contaminate a space).
+      const compatibility = embeddingRuntimeMatchesSpace(space, deps.embeddingProvider);
+      if (!compatibility.compatible) {
+        throw new AiError(
+          'Active EmbeddingSpace is incompatible with the runtime embedding provider; refusing to read or write vectors',
+          {
+            context: {
+              embeddingSpaceId: space.id,
+              spaceProvider: space.provider,
+              spaceModel: space.model,
+              spaceDimensions: space.dimensions,
+              runtimeProvider: deps.embeddingProvider.provider,
+              runtimeModel: deps.embeddingProvider.model,
+              runtimeDimensions: deps.embeddingProvider.dimensions,
+              mismatches: compatibility.mismatches,
+            },
+          },
+        );
+      }
     }
-    if (space && space.dimensions !== VECTOR_COLUMN_DIMENSIONS) {
-      throw new AiError(
-        `Embedding space dimension ${space.dimensions} does not match the vector(${VECTOR_COLUMN_DIMENSIONS}) column; dimension changes require the ADR-018 migration`,
-      );
-    }
+
+    // Temporal anchor: only open-ended experiences make the score
+    // time-dependent. Closed careers keep a stable (time-independent) identity.
+    const hasOpenEnded = experiences.some((experience) => experience.endDate === null);
+    const asOfDate = hasOpenEnded ? utcDateOnly(deps.clock.now()) : null;
+    const matchingAsOfDate = asOfDate === null ? null : asOfDate.toISOString().slice(0, 10);
 
     const identityHash = computeIdentityHash({
       engineVersion: policy.engineVersion,
@@ -208,6 +232,7 @@ export function createMatchingService(deps: MatchingServiceDeps) {
       candidateProfileHash,
       resumeSetHash,
       embeddingSpaceId: space?.id ?? null,
+      matchingAsOfDate,
     });
 
     const existing = await deps.matchingRepo.findMatchByIdentity(jobId, candidateId, identityHash);
@@ -231,6 +256,7 @@ export function createMatchingService(deps: MatchingServiceDeps) {
         embeddingSpaceId: row.embeddingSpaceId,
         engineVersion: row.engineVersion,
         weightsVersion: row.weightsVersion,
+        matchingAsOfDate: row.matchingAsOfDate === null ? null : row.matchingAsOfDate.toISOString().slice(0, 10),
       };
     }
 
@@ -259,7 +285,16 @@ export function createMatchingService(deps: MatchingServiceDeps) {
     }
 
     const result = runMatchEngine(
-      { job, profile, skills, languages, experiences, resumes, resumeSemantics },
+      {
+        job,
+        profile,
+        skills,
+        languages,
+        experiences,
+        resumes,
+        resumeSemantics,
+        asOfDate,
+      },
       policy,
     );
 
@@ -280,6 +315,7 @@ export function createMatchingService(deps: MatchingServiceDeps) {
       embeddingSpaceId: space?.id ?? null,
       identityHash,
       semanticModel: space ? `${space.provider}:${space.model}@${space.version}` : null,
+      matchingAsOfDate: asOfDate,
       computedAt: deps.clock.now(),
     });
 
@@ -290,6 +326,7 @@ export function createMatchingService(deps: MatchingServiceDeps) {
         matchId: row.id,
         identityHash,
         embeddingSpaceId: space?.id ?? null,
+        matchingAsOfDate,
         overallScore: result.overallScore,
         created,
         capApplied: result.breakdown.capApplied,
@@ -308,6 +345,7 @@ export function createMatchingService(deps: MatchingServiceDeps) {
       embeddingSpaceId: space?.id ?? null,
       engineVersion: policy.engineVersion,
       weightsVersion: policy.weightsVersion,
+      matchingAsOfDate,
     };
   }
 

@@ -54,6 +54,7 @@ const testEnv: Env = {
   TARGET_ENRICHMENT_MAX_PER_RUN: 25,
   EMBEDDING_DIMENSIONS: 1536,
   EMBEDDING_SPACE_VERSION: 'v1',
+  EMBEDDING_PROVIDER: 'mock',
 };
 
 const profileInput: CandidateProfileInput = {

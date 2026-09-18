@@ -4,6 +4,7 @@ import {
   computeDedupKey,
   computeJobContentHash,
   computeUrlHash,
+  isAppError,
   type NormalizedJob,
 } from '@job-system/core';
 import {
@@ -43,6 +44,7 @@ interface Scenario {
   provider: MockEmbeddingProvider;
   service: MatchingService;
   matchingRepo: ReturnType<typeof createMatchingRepo>;
+  spaceId: string | null;
 }
 
 async function seedScenario(options: {
@@ -66,6 +68,12 @@ async function seedScenario(options: {
   policy?: MatchPolicy;
   withSpace?: boolean;
   secondResume?: boolean;
+  /** Seeds one open-ended experience (endDate = null) for temporal tests. */
+  openEnded?: boolean;
+  /** Clock date used by the scenario service (defaults to 2026-09-18T12:00Z). */
+  asOf?: Date;
+  /** Embedding provider/model override (must match the created space). */
+  providerModel?: string;
 } = {}): Promise<Scenario> {
   const candidateRepo = createCandidateRepo(handle.db);
   const resumeRepo = createResumeRepo(handle.db);
@@ -100,7 +108,7 @@ async function seedScenario(options: {
     company: 'Acme',
     title: 'Senior Developer',
     startDate: new Date('2018-01-01T00:00:00Z'),
-    endDate: new Date('2024-01-01T00:00:00Z'),
+    endDate: options.openEnded ? null : new Date('2024-01-01T00:00:00Z'),
     description: '',
     skills: ['React'],
   });
@@ -186,23 +194,29 @@ async function seedScenario(options: {
     })
     .where(eq(jobTable.id, jobId));
 
+  const providerModel = options.providerModel ?? 'mock-deterministic-v1';
+  let spaceId: string | null = null;
   if (options.withSpace !== false) {
-    await matchingRepo.ensureEmbeddingSpace({
-      key: 'mock-deterministic-v1-1536-v1',
+    const space = await matchingRepo.ensureEmbeddingSpace({
+      key: `${providerModel}-1536-v1`,
       provider: 'mock',
-      model: 'mock-deterministic-v1',
+      model: providerModel,
       dimensions: 1536,
       distanceMetric: 'cosine',
       version: 'v1',
     });
+    spaceId = space.id;
   }
 
-  const provider = new MockEmbeddingProvider();
+  const provider = new MockEmbeddingProvider({ model: providerModel });
+  const scenarioClock = {
+    now: () => options.asOf ?? new Date('2026-09-18T12:00:00.000Z'),
+  };
   const service = createMatchingService({
     matchingRepo,
     aiUsageRepo,
     embeddingProvider: provider,
-    clock,
+    clock: scenarioClock,
     logger,
     ...(options.policy === undefined ? {} : { policy: options.policy }),
   });
@@ -213,6 +227,7 @@ async function seedScenario(options: {
     provider,
     service,
     matchingRepo,
+    spaceId,
   };
 }
 
@@ -361,7 +376,7 @@ describeIntegration('MatchingService (real Postgres + pgvector + mock embeddings
     expect(history.find((row) => row.isCurrent)!.weightsVersion).toBe('v2');
   });
 
-  it('produces a new identity when the active EmbeddingSpace changes (coexistence preserved)', async () => {
+  it('produces a new identity when the active EmbeddingSpace changes (compatible provider B)', async () => {
     const scenario = await seedScenario();
     const first = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
     const spaceA = first.embeddingSpaceId!;
@@ -377,9 +392,19 @@ describeIntegration('MatchingService (real Postgres + pgvector + mock embeddings
     expect(spaceB.status).toBe('inactive');
     await scenario.matchingRepo.activateEmbeddingSpace(spaceB.id);
 
-    const second = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    // Space B requires its own compatible provider (strict binding).
+    const providerB = new MockEmbeddingProvider({ model: 'mock-deterministic-v2' });
+    const serviceB = createMatchingService({
+      matchingRepo: scenario.matchingRepo,
+      aiUsageRepo: createAiUsageRepo(handle.db),
+      embeddingProvider: providerB,
+      clock,
+      logger,
+    });
+    const second = await serviceB.score(scenario.jobId, scenario.candidateId, trace);
     expect(second.matchId).not.toBe(first.matchId);
     expect(second.embeddingSpaceId).toBe(spaceB.id);
+    expect(providerB.calls).toBeGreaterThan(0);
 
     const history = await scenario.matchingRepo.listMatchHistory(scenario.jobId, scenario.candidateId);
     expect(history).toHaveLength(2);
@@ -400,6 +425,143 @@ describeIntegration('MatchingService (real Postgres + pgvector + mock embeddings
     // Exactly one active space at a time (partial unique index).
     const spaces = await scenario.matchingRepo.listEmbeddingSpaces();
     expect(spaces.filter((space) => space.status === 'active')).toHaveLength(1);
+  });
+
+  it('fails closed when the active space and the runtime provider do not match', async () => {
+    const scenario = await seedScenario();
+    const first = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    const callsBefore = scenario.provider.calls;
+    const embeddingsBefore = await handle.db.execute(
+      sql`select
+            (select count(*) from job_embedding) as jobs,
+            (select count(*) from resume_embedding) as resumes`,
+    );
+    const countBefore = embeddingsBefore.rows[0] as { jobs: string; resumes: string };
+
+    // Runtime provider B while the active space declares model-A.
+    const providerB = new MockEmbeddingProvider({ model: 'mock-deterministic-v2' });
+    const serviceB = createMatchingService({
+      matchingRepo: scenario.matchingRepo,
+      aiUsageRepo: createAiUsageRepo(handle.db),
+      embeddingProvider: providerB,
+      clock,
+      logger,
+    });
+    let caught: unknown;
+    try {
+      await serviceB.score(scenario.jobId, scenario.candidateId, trace);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isAppError(caught)).toBe(true);
+    const appError = caught as { code: string; context?: Record<string, unknown> };
+    expect(appError.code).toBe('AI_ERROR');
+    expect(appError.context?.['mismatches']).toEqual(
+      expect.arrayContaining([expect.stringContaining('model')]),
+    );
+    expect(appError.context?.['spaceModel']).toBe('mock-deterministic-v1');
+    expect(appError.context?.['runtimeModel']).toBe('mock-deterministic-v2');
+
+    // Fail closed: no embed call, no new vectors, current match untouched.
+    expect(providerB.calls).toBe(0);
+    expect(scenario.provider.calls).toBe(callsBefore);
+    const embeddingsAfter = await handle.db.execute(
+      sql`select
+            (select count(*) from job_embedding) as jobs,
+            (select count(*) from resume_embedding) as resumes`,
+    );
+    const countAfter = embeddingsAfter.rows[0] as { jobs: string; resumes: string };
+    expect(countAfter).toEqual(countBefore);
+    const history = await scenario.matchingRepo.listMatchHistory(scenario.jobId, scenario.candidateId);
+    expect(history).toHaveLength(1);
+    expect(history[0]!.id).toBe(first.matchId);
+    expect(history[0]!.isCurrent).toBe(true);
+  });
+
+  it('anchors open-ended experience to the injected clock (identity changes across days)', async () => {
+    const scenario = await seedScenario({
+      openEnded: true,
+      asOf: new Date('2026-09-18T00:00:00Z'),
+    });
+    const first = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    expect(first.matchingAsOfDate).toBe('2026-09-18');
+    const row = await scenario.matchingRepo.getCurrentMatch(scenario.jobId, scenario.candidateId);
+    expect(row!.matchingAsOfDate?.toISOString().slice(0, 10)).toBe('2026-09-18');
+    const signals = (row!.scoreBreakdown as {
+      signals: { experienceMatch: { present: boolean; score: number | null; details: string[] } };
+    }).signals;
+    expect(signals.experienceMatch.present).toBe(true);
+    expect(Number(signals.experienceMatch.score)).toBeGreaterThan(0);
+    expect(signals.experienceMatch.details.join(' ')).toContain('as of 2026-09-18');
+
+    // Same asOf: same identity, no new row.
+    const replay = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    expect(replay.matchId).toBe(first.matchId);
+
+    // Later asOf: the open role added experience -> new identity, v1 historical.
+    const laterService = createMatchingService({
+      matchingRepo: scenario.matchingRepo,
+      aiUsageRepo: createAiUsageRepo(handle.db),
+      embeddingProvider: scenario.provider,
+      clock: { now: () => new Date('2027-03-01T00:00:00Z') },
+      logger,
+    });
+    const later = await laterService.score(scenario.jobId, scenario.candidateId, trace);
+    expect(later.matchId).not.toBe(first.matchId);
+    expect(later.matchingAsOfDate).toBe('2027-03-01');
+    const history = await scenario.matchingRepo.listMatchHistory(scenario.jobId, scenario.candidateId);
+    expect(history).toHaveLength(2);
+    expect(history.filter((entry) => entry.isCurrent)).toHaveLength(1);
+    expect(history.find((entry) => entry.isCurrent)!.id).toBe(later.matchId);
+    // Cached embeddings are reused for the same content (no re-embed).
+    expect(scenario.provider.calls).toBeGreaterThan(0);
+  });
+
+  it('closed careers keep a time-independent identity (no daily churn)', async () => {
+    const scenario = await seedScenario();
+    const first = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    expect(first.matchingAsOfDate).toBeNull();
+
+    const laterService = createMatchingService({
+      matchingRepo: scenario.matchingRepo,
+      aiUsageRepo: createAiUsageRepo(handle.db),
+      embeddingProvider: scenario.provider,
+      clock: { now: () => new Date('2027-06-15T00:00:00Z') },
+      logger,
+    });
+    const later = await laterService.score(scenario.jobId, scenario.candidateId, trace);
+    expect(later.matchId).toBe(first.matchId);
+    expect(later.created).toBe(false);
+    expect(later.matchingAsOfDate).toBeNull();
+  });
+
+  it('engine bump keeps the historical match and creates the new current one', async () => {
+    const scenario = await seedScenario();
+    const v1Policy = MatchPolicySchema.parse({
+      ...DEFAULT_MATCH_POLICY,
+      engineVersion: 'matching-v1',
+    });
+    const v1Service = createMatchingService({
+      matchingRepo: scenario.matchingRepo,
+      aiUsageRepo: createAiUsageRepo(handle.db),
+      embeddingProvider: scenario.provider,
+      clock,
+      logger,
+      policy: v1Policy,
+    });
+    const first = await v1Service.score(scenario.jobId, scenario.candidateId, trace);
+    expect(first.engineVersion).toBe('matching-v1');
+
+    const second = await scenario.service.score(scenario.jobId, scenario.candidateId, trace);
+    expect(second.engineVersion).toBe('matching-v2');
+    expect(second.matchId).not.toBe(first.matchId);
+    const history = await scenario.matchingRepo.listMatchHistory(scenario.jobId, scenario.candidateId);
+    expect(history).toHaveLength(2);
+    const current = history.find((entry) => entry.isCurrent)!;
+    const historical = history.find((entry) => entry.id === first.matchId)!;
+    expect(current.engineVersion).toBe('matching-v2');
+    expect(historical.engineVersion).toBe('matching-v1');
+    expect(historical.isCurrent).toBe(false);
   });
 
   it('supports the deterministic-only path without an active space', async () => {

@@ -1,9 +1,8 @@
 import { Worker, type Job, type WorkerOptions } from 'bullmq';
-import { ConfigError, slugify, type Env } from '@job-system/shared';
+import { embeddingApiKey, resolveEmbeddingRuntime, slugify, type Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
 import { systemClock, type HttpClient, type JobSourceAdapter } from '@job-system/core';
 import {
-  VECTOR_DIMENSIONS,
   createAiUsageRepo,
   createCandidateRepo,
   createDb,
@@ -68,26 +67,15 @@ export async function startWorkerRuntime(
   const matchingRepo = createMatchingRepo(db.db);
   const aiUsageRepo = createAiUsageRepo(db.db);
 
-  // Phase 3 embeddings: fixed vector(1536) column; a different dimension
-  // requires the ADR-018 parallel-table migration (not Phase 3 scope).
-  if (env.EMBEDDING_DIMENSIONS !== VECTOR_DIMENSIONS) {
-    throw new ConfigError([
-      `EMBEDDING_DIMENSIONS must be ${VECTOR_DIMENSIONS} in Phase 3 (pgvector column is fixed); got ${env.EMBEDDING_DIMENSIONS}`,
-    ]);
-  }
-  const embeddingModel =
-    env.EMBEDDING_MODEL ??
-    (env.AI_PROVIDER === 'mock' ? 'mock-deterministic-v1' : undefined);
-  if (embeddingModel === undefined) {
-    throw new ConfigError([
-      `EMBEDDING_MODEL is required when AI_PROVIDER=${env.AI_PROVIDER}`,
-    ]);
-  }
+  // Phase 3.1: embeddings are configured independently from AI_PROVIDER.
+  // resolveEmbeddingRuntime validates provider support, model presence and the
+  // fixed vector(1536) column (ADR-018) with typed ConfigErrors.
+  const embeddingRuntime = resolveEmbeddingRuntime(env);
   const embeddingProvider = createEmbeddingProvider({
-    provider: env.AI_PROVIDER,
-    model: embeddingModel,
-    dimensions: env.EMBEDDING_DIMENSIONS,
-    apiKey: env.OPENAI_API_KEY,
+    provider: embeddingRuntime.provider,
+    model: embeddingRuntime.model,
+    dimensions: embeddingRuntime.dimensions,
+    apiKey: embeddingApiKey(env),
     baseUrl: env.EMBEDDING_BASE_URL,
   });
   await matchingRepo.ensureEmbeddingSpace({
