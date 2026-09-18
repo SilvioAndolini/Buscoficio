@@ -85,7 +85,7 @@ jobs:
             zricethezav/gitleaks:v8.30.1 detect \
             --source=/repo --config=/repo/.gitleaks.toml --redact -v --exit-code=2 --log-opts="--all"
 
-      - name: Dependency audit (blocking: 0 HIGH required)
+      - name: Dependency audit (blocking, 0 HIGH required)
         run: pnpm audit --prod --audit-level high
 
   e2e:
