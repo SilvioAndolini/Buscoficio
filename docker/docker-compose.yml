@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: job
       POSTGRES_DB: job_system
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - job-system-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +21,7 @@ services:
   redis:
     image: redis:7.4-alpine
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -47,7 +47,9 @@ services:
       dockerfile: docker/Dockerfile
     command: ['pnpm', '--filter', '@job-system/api', 'start']
     environment:
-      NODE_ENV: production
+      # Local/dev stack only — NOT production. Production (Phase 7) sets
+      # NODE_ENV=production with AUTH_COOKIE_SECURE=true and TLS in front.
+      NODE_ENV: development
       DATABASE_URL: postgres://job:job@postgres:5432/job_system
       REDIS_URL: redis://redis:6379
       API_HOST: 0.0.0.0
@@ -61,7 +63,7 @@ services:
       STORAGE_LOCAL_DIR: /app/.data/storage
       LOG_LEVEL: info
     ports:
-      - '3001:3001'
+      - '127.0.0.1:3001:3001'
     volumes:
       - job-system-storage:/app/.data/storage
     depends_on:
@@ -79,7 +81,8 @@ services:
       dockerfile: docker/Dockerfile
     command: ['pnpm', '--filter', '@job-system/worker', 'start']
     environment:
-      NODE_ENV: production
+      # Local/dev stack only — NOT production (see api service note).
+      NODE_ENV: development
       DATABASE_URL: postgres://job:job@postgres:5432/job_system
       REDIS_URL: redis://redis:6379
       AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-0f694fc3267fd0e17454bbe6dd6b4e163a41519495539195fd1567b476a15d75}

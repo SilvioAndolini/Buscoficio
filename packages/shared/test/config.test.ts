@@ -37,4 +37,24 @@ describe('loadEnv', () => {
   it('rejects non-boolean flag values', () => {
     expect(() => loadEnv({ ...validEnv, DRY_RUN: 'yes' })).toThrow(ConfigError);
   });
+
+  it('binds locally by default', () => {
+    expect(loadEnv(validEnv).API_HOST).toBe('127.0.0.1');
+  });
+
+  it('refuses an insecure cookie in production', () => {
+    expect(() =>
+      loadEnv({ ...validEnv, NODE_ENV: 'production', AUTH_COOKIE_SECURE: 'false' }),
+    ).toThrow(/AUTH_COOKIE_SECURE/);
+  });
+
+  it('accepts a secure cookie in production and insecure in development', () => {
+    expect(
+      loadEnv({ ...validEnv, NODE_ENV: 'production', AUTH_COOKIE_SECURE: 'true' }).AUTH_COOKIE_SECURE,
+    ).toBe(true);
+    expect(
+      loadEnv({ ...validEnv, NODE_ENV: 'development', AUTH_COOKIE_SECURE: 'false' })
+        .AUTH_COOKIE_SECURE,
+    ).toBe(false);
+  });
 });

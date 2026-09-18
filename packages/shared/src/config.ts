@@ -18,7 +18,7 @@ export const EnvSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
 
-  API_HOST: z.string().min(1).default('0.0.0.0'),
+  API_HOST: z.string().min(1).default('127.0.0.1'),
   API_PORT: z.coerce.number().int().positive().default(3001),
 
   AUTH_PASSWORD_HASH: z
@@ -59,5 +59,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`),
     );
   }
-  return parsed.data;
+  const env = parsed.data;
+  if (env.NODE_ENV === 'production' && !env.AUTH_COOKIE_SECURE) {
+    throw new ConfigError([
+      'AUTH_COOKIE_SECURE: insecure session cookie in production (set AUTH_COOKIE_SECURE=true behind TLS)',
+    ]);
+  }
+  return env;
 }
