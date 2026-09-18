@@ -283,8 +283,10 @@ describeIntegration('watchdog: stale runs are recovered with evidence', () => {
 describeIntegration('rate limiter: per source+operation with Retry-After penalties', () => {
   it('waits when the window is exhausted and respects penalties', async () => {
     const redis = createRedisConnection(TEST_REDIS_URL);
-    const limiter = createRedisRateLimiter(redis, createLogger({ level: 'error' }), {
-      windowMs: 300,
+    // Wide window so both acquires deterministically land in the same window
+    // even on slow CI machines; penalty test is independent of the window.
+    const limiter = createRedisRateLimiter(redis, createLogger({ level: 'warn' }), {
+      windowMs: 2_000,
     });
     try {
       const first = await limiter.acquire('src', 'search', 1);
