@@ -50,3 +50,27 @@ Los de la tarea (§24), verificados con evidencia ejecutable en el reporte final
 - Docker Compose dev: healthz/readyz OK, fuentes con policy notes registradas ✓
 - CI: jobs `ci` + `e2e` en verde.
 
+## Fase 2.1 — saneamiento (2026-09-18)
+
+Correcciones aplicadas y verificadas:
+
+- **SearchConfig respetado por todas las fuentes**: matcher determinista `evaluateSearchQuery`
+  (keywords en title/description/company/tags; locations normalizado con regla explícita para
+  ubicación desconocida; remote true/false sin excluir tipos desconocidos). Server-side donde existe
+  (remotive `search`) + fallback local siempre. Tests de contrato por adapter con payloads deterministas.
+- **L3 concurrent-safe**: advisory lock transaccional por `company_norm|location_norm` antes de la
+  evaluación fuzzy (además del lock por URL de L1). Tests de concurrencia (HIGH y gray zone, 5 rondas)
+  y promoción de target concurrente.
+- **Targets auto-detectados = blocked**: migración 0003 (default `blocked`), nota de política de
+  revisión pendiente por plataforma, re-detección que nunca resetea autorización, `PATCH
+  /v1/application-targets/:key` auditado. La asociación al Job se mantiene (discovery ≠ submission).
+- **Redirect enrichment conectado al pipeline**: solo cuando no hay target por metadata, con presupuesto
+  por run (`TARGET_ENRICHMENT_MAX_PER_RUN`), rate limit propio (`target-enrichment`) y parada en el
+  Location del ATS (sin fetch al host destino). E2E con 302→302→Greenhouse.
+- **Taxonomía HTTP**: 401/403 → `SourceAuthError` (sin retry); 429/5xx/4xx sin cambios. Tests del cliente.
+- **Logger contextual en servicios Fase 2**: scheduler, watchdog y rate limiter aceptan logger
+  job-scoped; handlers lo propagan. Tests de logging por job (`scheduler.sync`,
+  `maintenance.search-reconcile`, esperas de rate limit) con correlationId+jobId+sourceId.
+- **Fuentes bloqueadas**: test que verifica `SearchSourceRun=skipped` con razón explícita.
+- **Wording ToS** corregido (sin afirmaciones legales absolutas) en constantes y `docs/producto/14`.
+
