@@ -93,6 +93,7 @@ beforeAll(async () => {
     connection: createRedisConnection(TEST_REDIS_URL),
     prefix: QUEUE_PREFIX,
   });
+  await queueEvents.waitUntilReady();
 });
 
 afterAll(async () => {

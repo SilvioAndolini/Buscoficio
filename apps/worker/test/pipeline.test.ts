@@ -138,6 +138,7 @@ beforeAll(async () => {
     connection: createRedisConnection(TEST_REDIS_URL),
     prefix: QUEUE_PREFIX,
   });
+  await queueEvents.waitUntilReady();
 });
 
 afterAll(async () => {
@@ -274,6 +275,7 @@ describeIntegration('maintenance smoke job and tracing', () => {
       connection: createRedisConnection(TEST_REDIS_URL),
       prefix: QUEUE_PREFIX,
     });
+    await events.waitUntilReady();
     try {
       const correlationId = uuidv7();
       const job = await queues.maintenance.add('maintenance.smoke', { correlationId });
