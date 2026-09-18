@@ -103,6 +103,27 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
     return createDb(adminUrl(), { max: 1 });
   }
 
+  /** Builds a migrations folder containing only entries up to maxIdx. */
+  function buildPartialFolder(maxIdx: number): string {
+    const journal = JSON.parse(
+      readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: Array<{ idx: number; tag: string }> } & Record<string, unknown>;
+    const keptEntries = journal.entries.filter((entry) => entry.idx <= maxIdx);
+    const dir = mkdtempSync(join(tmpdir(), 'job-system-mig-'));
+    mkdirSync(join(dir, 'meta'), { recursive: true });
+    for (const entry of keptEntries) {
+      copyFileSync(
+        join(DEFAULT_MIGRATIONS_FOLDER, `${entry.tag}.sql`),
+        join(dir, `${entry.tag}.sql`),
+      );
+    }
+    writeFileSync(
+      join(dir, 'meta', '_journal.json'),
+      JSON.stringify({ ...journal, entries: keptEntries }, null, 2),
+    );
+    return dir;
+  }
+
   beforeAll(async () => {
     const admin = adminPool();
     await admin.pool.query(`CREATE DATABASE ${databaseName}`);
@@ -112,30 +133,14 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
     parsed.pathname = `/${databaseName}`;
     targetUrl = parsed.toString();
 
-    // Build a migrations folder containing only 0000–0003 (pre-hardening state).
-    const journal = JSON.parse(
-      readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
-    ) as { entries: Array<{ idx: number; tag: string }> } & Record<string, unknown>;
-    const keptEntries = journal.entries.filter((entry) => entry.idx <= 3);
-    partialDir = mkdtempSync(join(tmpdir(), 'job-system-mig-'));
-    mkdirSync(join(partialDir, 'meta'), { recursive: true });
-    for (const entry of keptEntries) {
-      copyFileSync(
-        join(DEFAULT_MIGRATIONS_FOLDER, `${entry.tag}.sql`),
-        join(partialDir, `${entry.tag}.sql`),
-      );
-    }
-    writeFileSync(
-      join(partialDir, 'meta', '_journal.json'),
-      JSON.stringify({ ...journal, entries: keptEntries }, null, 2),
-    );
+    // Stage 1: schema as it was before the hardening (0000–0003).
+    partialDir = buildPartialFolder(3);
     await runMigrations(targetUrl, partialDir);
 
-    // Legacy data as it existed in Phase 2 before the safe default (raw SQL:
-    // the pre-hardening schema has no reviewed_at/reviewed_by columns yet).
-    const { db, pool } = createDb(targetUrl, { max: 1 });
+    // Pre-0004 legacy rows (schema has no reviewed_at/reviewed_by yet).
+    const stage1 = createDb(targetUrl, { max: 1 });
     try {
-      await db.execute(sql`
+      await stage1.db.execute(sql`
         insert into application_target (id, key, kind, platform, label, status, policy_notes)
         values
           (${uuidv7()}, 'legacy-unreviewed', 'ats_browser', 'greenhouse', 'legacy-unreviewed', 'active', null),
@@ -143,10 +148,38 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
           (${uuidv7()}, 'legacy-blocked', 'ats_browser', 'workday', 'legacy-blocked', 'blocked', null)
       `);
     } finally {
-      await pool.end();
+      await stage1.pool.end();
     }
 
-    // Apply the remaining migrations (0004 columns + 0005 sanitization).
+    // Stage 2: apply 0004 (columns) + 0005 (first sanitization), then insert
+    // the Phase 2.1-era rows: a target could be active with the auto-generated
+    // pending-review note and no structured review evidence.
+    const stage2Dir = buildPartialFolder(5);
+    await runMigrations(targetUrl, stage2Dir);
+    rmSync(stage2Dir, { recursive: true, force: true });
+
+    const stage2 = createDb(targetUrl, { max: 1 });
+    try {
+      await stage2.db.execute(sql`
+        insert into application_target (id, key, kind, platform, label, status, policy_notes, reviewed_at, reviewed_by)
+        values
+          (${uuidv7()}, 'f21-pending', 'ats_browser', 'greenhouse', 'f21-pending', 'active',
+            'Detected ATS target (greenhouse). Discovery association allowed. Submission authorization pending separate platform policy review.', null, null),
+          (${uuidv7()}, 'structured-reviewed', 'ats_browser', 'lever', 'structured-reviewed', 'active',
+            'Auto-detected.
+Review completed 2026-09-18T10:00:00.000Z by user.
+Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z', 'user'),
+          (${uuidv7()}, 'textual-legacy', 'ats_browser', 'workable', 'textual-legacy', 'active',
+            'Reviewed policy 2026-01-01 by user.', null, null),
+          (${uuidv7()}, 'blocked-1', 'ats_browser', 'ashby', 'blocked-1', 'blocked', null, null, null),
+          (${uuidv7()}, 'paused-1', 'ats_browser', 'smartrecruiters', 'paused-1', 'paused',
+            'Submission authorization pending separate platform policy review.', null, null)
+      `);
+    } finally {
+      await stage2.pool.end();
+    }
+
+    // Stage 3: apply 0006 (active without structured review → blocked).
     await runMigrations(targetUrl);
   });
 
@@ -157,7 +190,7 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
     rmSync(partialDir, { recursive: true, force: true });
   });
 
-  it('blocks unreviewed legacy targets and preserves reviewed/blocked ones', async () => {
+  it('0005 blocks unreviewed pre-hardening targets and preserves reviewed/blocked ones', async () => {
     const { db, pool } = createDb(targetUrl, { max: 1 });
     try {
       const rows = await db.select().from(applicationTarget);
@@ -181,16 +214,65 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
     }
   });
 
+  it('0006 blocks active targets without structured review (all legacy cases)', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      const rows = await db.select().from(applicationTarget);
+      const byKey = new Map(rows.map((row) => [row.key, row]));
+
+      // Case C: Phase 2.1 legacy (active + pending-review note, no review).
+      const pending = byKey.get('f21-pending')!;
+      expect(pending.status).toBe('blocked');
+      expect(pending.policyNotes).toContain('pending separate platform policy review');
+
+      // Case A: structured review stays active, evidence untouched.
+      const structured = byKey.get('structured-reviewed')!;
+      expect(structured.status).toBe('active');
+      expect(structured.reviewedBy).toBe('user');
+      expect(structured.reviewedAt?.toISOString()).toBe('2026-09-18T10:00:00.000Z');
+      expect(structured.policyNotes).toContain('Review completed');
+
+      // Case D: textual legacy evidence is conservatively preserved (cannot
+      // derive reviewedAt/reviewedBy deterministically; never invent data).
+      const textual = byKey.get('textual-legacy')!;
+      expect(textual.status).toBe('active');
+      expect(textual.policyNotes).toBe('Reviewed policy 2026-01-01 by user.');
+      expect(textual.reviewedAt).toBeNull();
+      expect(textual.reviewedBy).toBeNull();
+
+      // Blocked and paused rows are untouched by design.
+      expect(byKey.get('blocked-1')!.status).toBe('blocked');
+      expect(byKey.get('paused-1')!.status).toBe('paused');
+
+      // Previous stages remain consistent.
+      expect(byKey.get('legacy-unreviewed')!.status).toBe('blocked');
+      expect(byKey.get('legacy-reviewed')!.status).toBe('active');
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('is idempotent when migrations run again', async () => {
     await runMigrations(targetUrl);
     const { db, pool } = createDb(targetUrl, { max: 1 });
     try {
       const rows = await db.select().from(applicationTarget);
       const byKey = new Map(rows.map((row) => [row.key, row]));
+
       expect(byKey.get('legacy-unreviewed')!.status).toBe('blocked');
       expect(byKey.get('legacy-reviewed')!.status).toBe('active');
       expect(byKey.get('legacy-reviewed')!.policyNotes).toBe('Reviewed policy 2026-01-01 by user.');
       expect(byKey.get('legacy-blocked')!.status).toBe('blocked');
+
+      expect(byKey.get('f21-pending')!.status).toBe('blocked');
+      expect(byKey.get('structured-reviewed')!.status).toBe('active');
+      expect(byKey.get('structured-reviewed')!.reviewedAt?.toISOString()).toBe(
+        '2026-09-18T10:00:00.000Z',
+      );
+      expect(byKey.get('textual-legacy')!.status).toBe('active');
+      expect(byKey.get('textual-legacy')!.policyNotes).toBe('Reviewed policy 2026-01-01 by user.');
+      expect(byKey.get('blocked-1')!.status).toBe('blocked');
+      expect(byKey.get('paused-1')!.status).toBe('paused');
     } finally {
       await pool.end();
     }
