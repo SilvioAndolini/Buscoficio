@@ -59,6 +59,27 @@ const profileInput: CandidateProfileInput = {
 const logLines: string[] = [];
 const captureStream: DestinationStream = { write: (line: string) => void logLines.push(line) };
 
+function parsedLogs(): Array<Record<string, unknown>> {
+  return logLines
+    .map((line) => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+}
+
+/** Every job-scoped log line must carry both correlationId and jobId. */
+function expectJobScoped(entry: Record<string, unknown> | undefined): void {
+  expect(entry).toBeDefined();
+  expect(typeof entry!['correlationId']).toBe('string');
+  expect((entry!['correlationId'] as string).length).toBeGreaterThan(0);
+  expect(typeof entry!['jobId']).toBe('string');
+  expect((entry!['jobId'] as string).length).toBeGreaterThan(0);
+}
+
 let handle: DbHandle;
 let runtime: WorkerRuntime;
 let queueEvents: QueueEvents;
@@ -157,6 +178,13 @@ describeIntegration('search pipeline (real Postgres + Redis)', () => {
       const { job: canonical, listings } = await jobRepo.getJobWithListings(reactJob!.job.id);
       expect(canonical.title).toBe('Senior React Developer');
       expect(listings.length).toBe(3);
+
+      // Internal service/handler logs keep the job trace context, not only
+      // the runtime's "job started"/"job completed" lines.
+      const finalized = parsedLogs().find((entry) => entry['msg'] === 'search run finalized');
+      expectJobScoped(finalized);
+      const completed = parsedLogs().find((entry) => entry['msg'] === 'source run completed');
+      expectJobScoped(completed);
     } finally {
       await Promise.all(Object.values(queues).map((queue) => queue.close()));
       await connection.quit();
@@ -222,6 +250,11 @@ describeIntegration('search pipeline (real Postgres + Redis)', () => {
       await job.waitUntilFinished(queueEvents, 30_000);
       const run = await waitForFinishedRun();
       expect(run.status).toBe('failed');
+
+      const missingAdapter = parsedLogs().find(
+        (entry) => entry['msg'] === 'configured source has no adapter',
+      );
+      expectJobScoped(missingAdapter);
     } finally {
       await Promise.all(Object.values(queues).map((queue) => queue.close()));
       await connection.quit();

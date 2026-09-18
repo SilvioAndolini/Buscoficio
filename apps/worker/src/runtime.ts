@@ -81,7 +81,7 @@ export async function startWorkerRuntime(
         jobLogger.info({ queue: queueName, name: job.name, attempt: job.attemptsMade + 1 }, 'job started');
         const startedAt = Date.now();
         try {
-          const result = await handler(job);
+          const result = await handler(job, jobLogger);
           jobLogger.info({ queue: queueName, name: job.name, durationMs: Date.now() - startedAt }, 'job completed');
           return result;
         } catch (error) {
@@ -95,7 +95,15 @@ export async function startWorkerRuntime(
       workerOptions,
     );
     worker.on('failed', (job, error) => {
-      logger.warn({ queue: queueName, jobId: job?.id, err: error }, 'worker job failure');
+      logger.warn(
+        {
+          queue: queueName,
+          jobId: job?.id,
+          correlationId: readCorrelationIdFromData(job?.data),
+          err: error,
+        },
+        'worker job failure',
+      );
     });
     return worker;
   });
@@ -114,7 +122,14 @@ export async function startWorkerRuntime(
 }
 
 function readCorrelationId(job: Job): string {
-  const data = job.data as Record<string, unknown>;
-  const value = data['correlationId'];
-  return typeof value === 'string' && value.length > 0 ? value : uuidv7();
+  const value = readCorrelationIdFromData(job.data);
+  return value ?? uuidv7();
+}
+
+function readCorrelationIdFromData(data: unknown): string | undefined {
+  if (typeof data === 'object' && data !== null && 'correlationId' in data) {
+    const value = (data as Record<string, unknown>)['correlationId'];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
 }

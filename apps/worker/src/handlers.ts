@@ -12,6 +12,9 @@ export interface JobHandlerDeps {
   logger: Logger;
 }
 
+/** Every handler receives the job-scoped child logger (correlationId + jobId). */
+export type JobHandler = (job: Job, logger: Logger) => Promise<unknown>;
+
 function readString(data: unknown, key: string): string {
   if (typeof data === 'object' && data !== null && key in data) {
     const value = (data as Record<string, unknown>)[key];
@@ -22,17 +25,22 @@ function readString(data: unknown, key: string): string {
 
 export function createJobHandlers(deps: JobHandlerDeps) {
   return {
-    'maintenance.smoke': async (job: Job) => {
+    'maintenance.smoke': async (job: Job, logger: Logger) => {
+      logger.debug({ echoed: job.data as unknown }, 'smoke payload received');
       return { ok: true, echoed: job.data as unknown };
     },
 
-    'search.run': async (job: Job) => {
+    'search.run': async (job: Job, logger: Logger) => {
       const searchConfigId = readString(job.data, 'searchConfigId');
       const correlationId = readString(job.data, 'correlationId');
-      const run = await deps.searchService.startRun(searchConfigId, {
-        correlationId,
-        ...(job.id === undefined ? {} : { jobId: job.id }),
-      });
+      const run = await deps.searchService.startRun(
+        searchConfigId,
+        {
+          correlationId,
+          ...(job.id === undefined ? {} : { jobId: job.id }),
+        },
+        logger,
+      );
       for (const source of run.sources) {
         await deps.queues.ingest.add(
           'ingest.source',
@@ -50,13 +58,14 @@ export function createJobHandlers(deps: JobHandlerDeps) {
       return { searchRunId: run.searchRunId, sources: run.sources.map((source) => source.key) };
     },
 
-    'ingest.source': async (job: Job) => {
+    'ingest.source': async (job: Job, logger: Logger) => {
       const searchRunId = readString(job.data, 'searchRunId');
       const sourceKey = readString(job.data, 'sourceKey');
       const correlationId = readString(job.data, 'correlationId');
       const outcome = await deps.searchService.runSource(
         { searchRunId, sourceKey },
         { correlationId, ...(job.id === undefined ? {} : { jobId: job.id }), sourceId: sourceKey },
+        logger,
       );
       await deps.queues.search.add(
         'search.finalize',
@@ -66,16 +75,16 @@ export function createJobHandlers(deps: JobHandlerDeps) {
       return outcome;
     },
 
-    'search.finalize': async (job: Job) => {
+    'search.finalize': async (job: Job, logger: Logger) => {
       const searchRunId = readString(job.data, 'searchRunId');
       const result = await deps.searchRepo.finalizeRun(searchRunId);
-      deps.logger.info(
+      logger.info(
         { searchRunId, status: result.status, finalized: result.finalized },
         'search run finalized',
       );
       return { searchRunId, status: result.status, finalized: result.finalized };
     },
-  } satisfies Record<string, (job: Job) => Promise<unknown>>;
+  } satisfies Record<string, JobHandler>;
 }
 
 export type JobHandlers = ReturnType<typeof createJobHandlers>;

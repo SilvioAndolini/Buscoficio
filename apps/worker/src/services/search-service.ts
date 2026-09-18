@@ -33,7 +33,7 @@ const MAX_PAGES = 10;
 export function createSearchService(deps: SearchServiceDeps) {
   return {
     /** Creates the parent run and one child row per configured source. */
-    async startRun(searchConfigId: string, trace: TraceContext) {
+    async startRun(searchConfigId: string, trace: TraceContext, logger: Logger = deps.logger) {
       const config = await deps.searchRepo.getConfig(searchConfigId);
       const run = await deps.searchRepo.createRun(searchConfigId, trace.correlationId);
       const sources: Array<{ key: string; sourceId: string }> = [];
@@ -41,7 +41,7 @@ export function createSearchService(deps: SearchServiceDeps) {
       for (const key of config.sources) {
         const adapter = deps.registry.get(key);
         if (!adapter) {
-          deps.logger.warn({ searchRunId: run.id, sourceKey: key }, 'configured source has no adapter');
+          logger.warn({ searchRunId: run.id, sourceKey: key }, 'configured source has no adapter');
           continue;
         }
         const sourceRow = await deps.jobRepo.upsertSource({
@@ -61,7 +61,9 @@ export function createSearchService(deps: SearchServiceDeps) {
     async runSource(
       input: { searchRunId: string; sourceKey: string },
       trace: TraceContext,
+      logger: Logger = deps.logger,
     ): Promise<SourceRunOutcome> {
+      const sourceLogger = logger.child({ sourceId: input.sourceKey });
       const run = await deps.searchRepo.getRun(input.searchRunId);
       const config = await deps.searchRepo.getConfig(run.searchConfigId);
       const adapter = deps.registry.require(input.sourceKey);
@@ -102,6 +104,17 @@ export function createSearchService(deps: SearchServiceDeps) {
           page += 1;
         }
 
+        sourceLogger.info(
+          {
+            searchRunId: input.searchRunId,
+            discovered: counters.discovered,
+            new: counters.new,
+            duplicated: counters.duplicated,
+            rejected: counters.rejected,
+            durationMs: Date.now() - startedAt,
+          },
+          'source run completed',
+        );
         await deps.searchRepo.finishSourceRun(sourceRun.id, {
           status: 'completed',
           jobsDiscovered: counters.discovered,
@@ -127,8 +140,8 @@ export function createSearchService(deps: SearchServiceDeps) {
           errorClass,
           errorDetail,
         });
-        deps.logger.warn(
-          { searchRunId: input.searchRunId, sourceKey: input.sourceKey, errorClass },
+        sourceLogger.warn(
+          { searchRunId: input.searchRunId, errorClass },
           'source run failed',
         );
         return { sourceKey: input.sourceKey, status: 'failed', errorClass, ...counters };
