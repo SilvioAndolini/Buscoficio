@@ -62,3 +62,38 @@ test('runs a mock search from the UI and shows canonical jobs', async ({ page })
   await expect(page.getByText(/listing\(s\)/)).toBeVisible();
   await expect(page.getByText(/destino: greenhouse/)).toBeVisible();
 });
+
+test('ranks matches by score and explains them without an LLM', async ({ page }) => {
+  test.setTimeout(90_000);
+  await login(page);
+
+  await page.goto('/matches');
+  await page.getByRole('button', { name: 'Recomputar pendientes' }).click();
+
+  // The worker computes matches; the UI polls until every active job is ranked.
+  await expect(page.getByRole('cell', { name: 'Senior React Developer' })).toBeVisible({
+    timeout: 45_000,
+  });
+  await expect(page.getByRole('cell', { name: 'Engineering CV' }).first()).toBeVisible();
+
+  const scoreTexts = await page
+    .locator('table tbody tr td:nth-child(2)')
+    .allTextContents();
+  const scores = scoreTexts
+    .map((text) => Number.parseFloat(text.replace('%', '')))
+    .filter((value) => !Number.isNaN(value));
+  expect(scores.length).toBeGreaterThanOrEqual(2);
+  for (let index = 1; index < scores.length; index += 1) {
+    expect(scores[index - 1]!).toBeGreaterThanOrEqual(scores[index]!);
+  }
+
+  // Expandable breakdown with explicit N/A for absent signals.
+  await page
+    .getByRole('row', { name: /Senior React Developer/ })
+    .getByRole('button', { name: 'Detalle' })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Desglose del score' })).toBeVisible();
+  await expect(page.getByText('N/A').first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Razones' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Selección de CV' })).toBeVisible();
+});
