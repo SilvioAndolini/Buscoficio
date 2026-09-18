@@ -50,12 +50,19 @@ Entregables:
 - Filtros duros de política + rate limiting por fuente + métricas de fallos por fuente.
 
 Criterios de aceptación:
-- [ ] Búsqueda programada con fan-out: un fallo de fuente produce `partial`, nunca pérdida del resto.
-- [ ] `SearchRun` deriva su estado de los hijos; contadores correctos (test de concurrencia).
-- [ ] Oferta descubierta en agregador con destino Greenhouse queda con `application_target_id` del ATS.
-- [ ] Duplicados entre fuentes se agrupan en un Job canónico con un único target primario.
-- [ ] Zona gris de dedup va a revisión sin merge automático.
-- [ ] Revisión de ToS registrada por cada target activo.
+- [x] Búsqueda programada con fan-out: un fallo de fuente produce `partial`, nunca pérdida del resto. *(verificado 2026-09-18: worker test de fan-out 3 fuentes)*
+- [x] `SearchRun` deriva su estado de los hijos; contadores correctos (test de concurrencia). *(finalizador idempotente + test concurrente)*
+- [x] Oferta descubierta en agregador con destino Greenhouse queda con `application_target_id` del ATS. *(E2E con fixture server: metadata y redirect enrichment)*
+- [x] Duplicados entre fuentes se agrupan en un Job canónico con un único target primario. *(promoción determinista + conflicto registrado; test concurrente)*
+- [x] Zona gris de dedup va a revisión sin merge automático. *(tests secuencial y concurrente: 2 jobs + 1 review pending)*
+- [x] Revisión de ToS registrada por cada target activo. *(policy_notes por fuente y por target; targets auto-detectados `blocked` con revisión pendiente)*
+
+**Fase 2.1 — saneamiento verificado (2026-09-18):** SearchConfig respetado por todas las fuentes
+(matcher determinista + server-side donde existe), L3 concurrent-safe (advisory lock company+location),
+targets auto-detectados bloqueados con nota de revisión pendiente y activación auditada, redirect
+enrichment conectado con presupuesto/rate-limit, taxonomía 401/403→`SourceAuthError`, logger contextual
+en servicios de Fase 2, wording ToS corregido. Evidencia: 158 tests de integración + 2 E2E Playwright +
+CI `ci`/`e2e` en verde.
 
 ## Fase 3 — Matching
 
