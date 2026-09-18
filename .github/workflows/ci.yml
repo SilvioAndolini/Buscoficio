@@ -85,6 +85,43 @@ jobs:
             zricethezav/gitleaks:v8.30.1 detect \
             --source=/repo --config=/repo/.gitleaks.toml --redact -v --exit-code=2 --log-opts="--all"
 
-      - name: Dependency audit (non-blocking)
+      - name: Dependency audit (blocking: 0 HIGH required)
         run: pnpm audit --prod --audit-level high
-        continue-on-error: true
+
+  e2e:
+    name: Playwright E2E (api + worker + web + postgres + redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Runs docker/docker-compose.test.yml (postgres+redis), migrations, api,
+      # worker, web build and the Playwright smoke suite. Never targets real
+      # job platforms; only the local mock source and the local UI are used.
+      - name: UI E2E smoke
+        run: pnpm test:e2e
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
