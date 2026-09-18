@@ -11,6 +11,8 @@ pnpm turbo typecheck     # strict, noUncheckedIndexedAccess, exactOptionalProper
 pnpm turbo test          # unit + integración (integración se omite sin TEST_DATABASE_URL/TEST_REDIS_URL)
 pnpm test:integration    # levanta Postgres/Redis reales y ejecuta TODO
 pnpm test:e2e            # smoke Playwright (build + compose + api + worker + web)
+pnpm test:live           # suite live manual contra APIs reales (fuera de CI)
+pnpm record:fixtures     # regraba fixtures anonimizados de las fuentes reales
 pnpm turbo build         # tsup (api/worker) + next build (web)
 pnpm db:migrate          # requiere DATABASE_URL
 ```
@@ -35,4 +37,10 @@ pnpm db:migrate          # requiere DATABASE_URL
 
 ## Contexto de fase
 
-Fase 1 (Foundation) completada: perfil, CVs versionados inmutables, búsqueda mock, normalización Zod, dedup L0–L2, JobListing + Job canónico, API Fastify, worker BullMQ, UI mínima, CI y E2E. Próxima: Fase 2 (fuentes reales, scheduler, L3).
+Fase 1 (Foundation) completada. **Fase 2 (Job Discovery) completada**: 3 fuentes reales por API pública
+(remotive, arbeitnow, remoteok) con revisión ToS en `policy_notes`, scheduler BullMQ reconciliado desde
+`search_config`, fan-out `SearchRun`/`SearchSourceRun` con finalizador idempotente y watchdog, dedup L3
+pg_trgm con umbrales configurables y zona gris `dedup_review` (decisión humana, nunca auto-merge), filtros
+duros con razones, rate limiting Redis por fuente+operación y UI mínima de descubrimiento.
+Detalles en `docs/producto/14-fuentes-y-tos.md` y `docs/plans/phase-2-job-discovery.md`.
+Próxima: Fase 3 (matching).

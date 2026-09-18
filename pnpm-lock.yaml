@@ -87,6 +87,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@job-system/job-sources':
+        specifier: workspace:*
+        version: link:../../packages/job-sources
       '@job-system/worker':
         specifier: workspace:*
         version: link:../worker

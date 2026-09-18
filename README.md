@@ -1,7 +1,7 @@
 # Job System — Automated Job Search & Application System
 
 Plataforma personal de búsqueda, clasificación y candidatura a ofertas de empleo.
-**Estado: Fase 1 (Foundation) completada** — esqueleto funcional end-to-end con datos ficticios y una fuente mock.
+**Estado: Fase 2 (Job Discovery) completada** — descubrimiento multi-fuente real (remotive, arbeitnow, remoteok), scheduler, dedup L0–L3, filtros duros, rate limiting, watchdog y UI mínima.
 
 ## Stack
 
@@ -36,6 +36,7 @@ docker compose -f docker/docker-compose.yml up -d --build --wait
 | `pnpm turbo test` | Unit + integración (los de integración se omiten sin `TEST_DATABASE_URL`/`TEST_REDIS_URL`) |
 | `pnpm test:integration` | Levanta Postgres/Redis de test, exporta URLs y ejecuta toda la suite real |
 | `pnpm test:e2e` | Smoke Playwright: build + api + worker + web + navegador |
+| `pnpm test:live` | Suite live manual contra las APIs reales (nunca en CI) |
 | `pnpm turbo build` | Bundles de api/worker (tsup) y build de web (Next) |
 | `pnpm db:migrate` | Aplica migraciones (requiere `DATABASE_URL`) |
 | `pnpm --filter @job-system/database db:generate` | Genera migración a partir del schema Drizzle |
