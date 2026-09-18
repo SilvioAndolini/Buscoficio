@@ -55,6 +55,7 @@ function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): En
     // Scheduled runs are exercised by worker integration tests; the E2E keeps
     // manual runs for determinism (no background runs mid-test).
     SCHEDULER_ENABLED: false,
+    TARGET_ENRICHMENT_MAX_PER_RUN: 25,
   };
 }
 
@@ -74,20 +75,48 @@ const CRAFTED_REMOTEOK_JOB = {
   tags: ['platform'],
 };
 
+/** Offer whose target is only discoverable by following redirects (enrichment). */
+function craftedRedirectJob(baseUrl: string): Record<string, unknown> {
+  return {
+    id: 900002,
+    slug: 'acme-redirect-engineer',
+    company: 'Acme Remote',
+    position: 'Redirect Engineer (Fixture)',
+    description: '<p>Redirect-only application flow.</p>',
+    location: 'Remote',
+    url: `${baseUrl}/redirect/step1`,
+    date: '2026-01-11T00:00:00Z',
+    tags: ['platform'],
+  };
+}
+
 function startFixtureServer(): Promise<{ server: Server; baseUrl: string }> {
   const fixturesDir = resolve(process.cwd(), '../../packages/job-sources/test/fixtures');
   const remotive = JSON.parse(readFileSync(join(fixturesDir, 'remotive/search-page.json'), 'utf8'));
   const arbeitnow = JSON.parse(readFileSync(join(fixturesDir, 'arbeitnow/search-page.json'), 'utf8'));
   const remoteokRaw = JSON.parse(readFileSync(join(fixturesDir, 'remoteok/search-page.json'), 'utf8')) as unknown[];
-  const remoteok = [...remoteokRaw, CRAFTED_REMOTEOK_JOB];
 
+  let base = '';
   const server = createServer((request, response) => {
     const url = request.url ?? '';
+    if (url.startsWith('/redirect/step1')) {
+      response.statusCode = 302;
+      response.setHeader('location', `${base}/redirect/step2`);
+      response.end();
+      return;
+    }
+    if (url.startsWith('/redirect/step2')) {
+      response.statusCode = 302;
+      response.setHeader('location', 'https://boards.greenhouse.io/acme/jobs/777');
+      response.end();
+      return;
+    }
     response.setHeader('content-type', 'application/json');
     if (url.startsWith('/api/remote-jobs')) response.end(JSON.stringify(remotive));
     else if (url.startsWith('/api/job-board-api')) response.end(JSON.stringify(arbeitnow));
-    else if (url.startsWith('/api')) response.end(JSON.stringify(remoteok));
-    else {
+    else if (url.startsWith('/api')) {
+      response.end(JSON.stringify([...remoteokRaw, CRAFTED_REMOTEOK_JOB, craftedRedirectJob(base)]));
+    } else {
       response.statusCode = 404;
       response.end('{}');
     }
@@ -97,7 +126,8 @@ function startFixtureServer(): Promise<{ server: Server; baseUrl: string }> {
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       const port = typeof address === 'object' && address !== null ? address.port : 0;
-      resolvePromise({ server, baseUrl: `http://127.0.0.1:${port}` });
+      base = `http://127.0.0.1:${port}`;
+      resolvePromise({ server, baseUrl: base });
     });
   });
 }
@@ -519,6 +549,43 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     };
     expect(detail.applicationTarget?.key).toBe('greenhouse-acme');
     expect(detail.listings.map((entry) => entry.sourceKey)).toContain('remoteok');
+
+    // Redirect-only offer: target resolved by enrichment (follow redirect chain
+    // without ever fetching the ATS host, which is not served locally).
+    const redirectJob = jobs.items.find((job) => job.title === 'Redirect Engineer (Fixture)');
+    expect(redirectJob).toBeDefined();
+    const redirectDetailResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/jobs/${redirectJob!.id}`,
+      headers: withCookie(),
+    });
+    const redirectDetail = redirectDetailResponse.json() as {
+      applicationTarget: { key: string } | null;
+    };
+    expect(redirectDetail.applicationTarget?.key).toBe('greenhouse-acme');
+
+    // Auto-detected targets are blocked pending policy review; authorizing is
+    // an explicit audited action.
+    const targetsResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/application-targets',
+      headers: withCookie(),
+    });
+    const targets = (targetsResponse.json() as {
+      items: Array<{ key: string; status: string; policyNotes: string | null }>;
+    }).items;
+    const greenhouse = targets.find((target) => target.key === 'greenhouse-acme');
+    expect(greenhouse?.status).toBe('blocked');
+    expect(greenhouse?.policyNotes).toContain('pending separate platform policy review');
+
+    const authorize = await app.inject({
+      method: 'PATCH',
+      url: '/v1/application-targets/greenhouse-acme',
+      headers: withCookie(),
+      payload: { status: 'active' },
+    });
+    expect(authorize.statusCode).toBe(200);
+    expect((authorize.json() as { status: string }).status).toBe('active');
 
     // Source registry exposes the reviewed policy notes for real sources.
     const sourcesResponse = await app.inject({ method: 'GET', url: '/v1/sources', headers: withCookie() });
