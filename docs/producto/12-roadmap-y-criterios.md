@@ -88,12 +88,23 @@ Entregables:
 - UI de ranking con explicación.
 
 Criterios de aceptación:
-- [ ] Recomputar el mismo input **no** crea fila nueva (idempotencia por `identity_hash`).
-- [ ] Cambiar la descripción de la oferta o un CV genera identidad nueva y nuevo match vigente, preservando histórico.
-- [ ] Existe a lo sumo un `isCurrent` por (job, candidato) (test de constraint).
-- [ ] Requisito duro incumplido topea el score y aparece en `missingRequirements`.
-- [ ] Cambiar de espacio de embeddings no rompe datos previos (coexistencia probada).
-- [ ] Re-ejecutar no re-embebe contenido sin cambios (caché).
+- [x] Recomputar el mismo input **no** crea fila nueva (idempotencia por `identity_hash`). *(test de servicio + constraint UNIQUE)*
+- [x] Cambiar la descripción de la oferta o un CV genera identidad nueva y nuevo match vigente, preservando histórico. *(tests de job/perfil/CV/pesos/espacio)*
+- [x] Existe a lo sumo un `isCurrent` por (job, candidato) (test de constraint). *(partial unique probado con SQL directo + concurrencia)*
+- [x] Requisito duro incumplido topea el score y aparece en `missingRequirements`. *(cap 0.49 + test de idioma C1 vs B2)*
+- [x] Cambiar de espacio de embeddings no rompe datos previos (coexistencia probada). *(Space A/B + vectores coexistentes)*
+- [x] Re-ejecutar no re-embebe contenido sin cambios (caché). *(contador del MockEmbeddingProvider sin cambios; `ai_usage` sólo en llamadas reales)*
+
+**Fase 3 — Matching implementada y verificada (2026-09-18):** motor determinista versionado
+(`matching-v1`/`v1`) con 8 señales (ausentes fuera del denominador), requisitos duros con cap,
+explicabilidad persistida (breakdown Zod + reasons + missingRequirements + matchingSkills),
+selección determinista de CV, `EmbeddingProvider` (mock determinista + adapter OpenAI-compatible
+en `packages/ai`), pgvector real (`job_embedding`/`resume_embedding` vector(1536) + HNSW cosine),
+caché por `contentHash`, `EmbeddingSpace` único activo con coexistencia, `job_match` con
+`UNIQUE(job_id,candidate_id,identity_hash)` + partial unique `is_current` + índice de ranking,
+cola `match` desacoplada del discovery y UI `/matches` con breakdown expandible.
+Evidencia: unit matching+ai, integración Postgres/pgvector (idempotencia, caché, espacios,
+concurrencia, ranking), E2E API (ranking + recompute v1→v2) y Playwright 3/3.
 
 ## Fase 4 — Application Preparation
 

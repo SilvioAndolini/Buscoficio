@@ -43,4 +43,12 @@ Fase 1 (Foundation) completada. **Fase 2 (Job Discovery) completada**: 3 fuentes
 pg_trgm con umbrales configurables y zona gris `dedup_review` (decisión humana, nunca auto-merge), filtros
 duros con razones, rate limiting Redis por fuente+operación y UI mínima de descubrimiento.
 Detalles en `docs/producto/14-fuentes-y-tos.md` y `docs/plans/phase-2-job-discovery.md`.
-Próxima: Fase 3 (matching).
+
+**Fase 3 (Matching) completada**: motor determinista versionado (`matching-v1`/`v1`) con señales
+deterministas + semánticas (ausentes fuera del denominador), requisitos duros con cap y explicación,
+identidad completa de `JobMatch` (`identity_hash` + `is_current` con constraints), embeddings pgvector
+reales con caché por `contentHash` y `EmbeddingSpace` único activo (coexistencia de espacios), cola
+`match` desacoplada del discovery y UI `/matches`. `EmbeddingProvider` se inyecta desde `packages/ai`
+(`AI_PROVIDER=mock` por defecto; jamás un LLM decide score/CV/requisitos). Detalles en
+`docs/plans/phase-3-matching.md`.
+Próxima: Fase 4 (application preparation).
