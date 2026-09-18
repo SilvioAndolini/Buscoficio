@@ -170,18 +170,43 @@ export function createJobRepo(db: Db) {
               .values({ ...baseValues, jobId: targetJobId })
               .returning();
             const [currentJob] = await tx
-              .select({ mergedFrom: t.job.mergedFrom })
+              .select({
+                mergedFrom: t.job.mergedFrom,
+                applicationTargetId: t.job.applicationTargetId,
+              })
               .from(t.job)
               .where(eq(t.job.id, targetJobId))
               .limit(1);
+
+            const reasons = [reason];
+            const targetUpdate: {
+              applicationTargetId?: string;
+              applicationTargetResolvedAt?: Date;
+            } = {};
+            if (data.applicationTargetId !== null) {
+              const currentTargetId = currentJob?.applicationTargetId ?? null;
+              if (currentTargetId === null) {
+                // Deterministic promotion: job had no target, merged listing does.
+                targetUpdate.applicationTargetId = data.applicationTargetId;
+                targetUpdate.applicationTargetResolvedAt = data.discoveredAt;
+                reasons.push('application target promoted from merged listing');
+              } else if (currentTargetId !== data.applicationTargetId) {
+                // Never overwrite silently; keep current and record the conflict.
+                reasons.push(
+                  `application target conflict kept existing (${currentTargetId}); merged listing offered (${data.applicationTargetId})`,
+                );
+              }
+            }
+
             await tx
               .update(t.job)
               .set({
                 mergedFrom: [...(currentJob?.mergedFrom ?? []), listing!.id],
                 updatedAt: new Date(),
+                ...targetUpdate,
               })
               .where(eq(t.job.id, targetJobId));
-            return { outcome: 'merged', listingId: listing!.id, jobId: targetJobId, reasons: [reason] };
+            return { outcome: 'merged', listingId: listing!.id, jobId: targetJobId, reasons };
           }
 
           const [job] = await tx

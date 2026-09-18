@@ -39,12 +39,14 @@ function ingestData(overrides: {
   urlHash?: string;
   dedupKey?: string;
   normalizedJob?: NormalizedJob;
+  applicationTargetId?: string | null;
+  applicationTargetSignal?: string | null;
 }) {
   return {
     sourceId: '',
     externalId: overrides.externalId,
-    applicationTargetId: null,
-    applicationTargetSignal: null,
+    applicationTargetId: overrides.applicationTargetId ?? null,
+    applicationTargetSignal: overrides.applicationTargetSignal ?? null,
     normalized: overrides.normalizedJob ?? normalized({ externalId: overrides.externalId }),
     urlHash: overrides.urlHash ?? URL_HASH,
     dedupKey: overrides.dedupKey ?? DEDUP_KEY,
@@ -168,5 +170,62 @@ describeDb('ingest idempotency (L0–L2)', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]!.job.title).toBe('Senior React Developer');
     expect(jobs[0]!.primaryListing?.externalId).toBe('m-001');
+  });
+
+  it('promotes the application target from a merged listing when the job has none', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const greenhouse = await repo.upsertTarget({
+      key: 'greenhouse',
+      kind: 'ats_browser',
+      platform: 'greenhouse',
+      label: 'Greenhouse',
+    });
+
+    const first = await repo.ingestJob({ ...ingestData({ externalId: 'm-001' }), sourceId: source.id });
+    expect(first.outcome).toBe('new');
+
+    const merged = await repo.ingestJob({
+      ...ingestData({ externalId: 'm-003', applicationTargetId: greenhouse.id, applicationTargetSignal: 'metadata' }),
+      sourceId: source.id,
+    });
+    expect(merged.outcome).toBe('merged');
+    expect(merged.reasons.join(' ')).toContain('application target promoted');
+
+    const { job } = await repo.getJobWithListings(first.jobId!);
+    expect(job.applicationTargetId).toBe(greenhouse.id);
+  });
+
+  it('keeps the existing application target on conflict and records it', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const greenhouse = await repo.upsertTarget({
+      key: 'greenhouse',
+      kind: 'ats_browser',
+      platform: 'greenhouse',
+      label: 'Greenhouse',
+    });
+    const lever = await repo.upsertTarget({
+      key: 'lever',
+      kind: 'ats_browser',
+      platform: 'lever',
+      label: 'Lever',
+    });
+
+    const first = await repo.ingestJob({
+      ...ingestData({ externalId: 'm-001', applicationTargetId: greenhouse.id }),
+      sourceId: source.id,
+    });
+    const merged = await repo.ingestJob({
+      ...ingestData({ externalId: 'm-003', applicationTargetId: lever.id }),
+      sourceId: source.id,
+    });
+    expect(merged.outcome).toBe('merged');
+    expect(merged.reasons.join(' ')).toContain('application target conflict');
+
+    const { job, listings } = await repo.getJobWithListings(first.jobId!);
+    expect(job.applicationTargetId).toBe(greenhouse.id);
+    const mergedListing = listings.find((entry) => entry.listing.externalId === 'm-003');
+    expect(mergedListing?.listing.applicationTargetId).toBe(lever.id);
   });
 });
