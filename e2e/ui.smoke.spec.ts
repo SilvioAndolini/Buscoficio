@@ -49,6 +49,10 @@ test('runs a mock search from the UI and shows canonical jobs', async ({ page })
   await expect(page.getByText('Búsqueda completada')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByRole('cell', { name: 'Senior React Developer' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Ver' }).first().click();
+  await page
+    .getByRole('row', { name: /Senior React Developer/ })
+    .getByRole('button', { name: 'Ver' })
+    .click();
   await expect(page.getByText(/listing\(s\)/)).toBeVisible();
+  await expect(page.getByText(/destino: greenhouse/)).toBeVisible();
 });

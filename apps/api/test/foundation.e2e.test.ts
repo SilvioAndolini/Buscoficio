@@ -282,8 +282,12 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
       headers: withCookie(),
     });
     expect(jobDetailResponse.statusCode).toBe(200);
-    const detail = jobDetailResponse.json() as { listings: unknown[] };
+    const detail = jobDetailResponse.json() as {
+      listings: unknown[];
+      applicationTarget: { key: string; kind: string } | null;
+    };
     expect(detail.listings.length).toBeGreaterThanOrEqual(2);
+    expect(detail.applicationTarget?.key).toBe('greenhouse');
   });
 
   it('is idempotent across two runs (no duplicate jobs)', async () => {
