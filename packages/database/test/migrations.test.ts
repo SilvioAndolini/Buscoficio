@@ -66,6 +66,16 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       expect(indexNames).toContain('job_listing_source_external_uq');
       expect(indexNames).toContain('job_dedup_key_uq');
       expect(indexNames).toContain('resume_version_resume_version_uq');
+      expect(indexNames).not.toContain('resume_candidate_category_language_uq');
+
+      const constraints = await db.execute(
+        sql`select conname, confdeltype from pg_constraint where conrelid = 'resume_version'::regclass and contype = 'f'`,
+      );
+      const fk = (constraints.rows as Array<{ conname: string; confdeltype: string }>).find((row) =>
+        row.conname.includes('parent_version_id'),
+      );
+      expect(fk).toBeDefined();
+      expect(fk!.confdeltype).toBe('r');
     } finally {
       await pool.end();
     }

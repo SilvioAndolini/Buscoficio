@@ -158,6 +158,69 @@ describeDb('resume repository (immutability)', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('allows multiple resumes with the same category and language', async () => {
+    const candidateRepo = createCandidateRepo(handle.db);
+    const resumeRepo = createResumeRepo(handle.db);
+    const profile = await candidateRepo.upsertProfile(profileInput);
+
+    const fullStack = await resumeRepo.createResume(profile.id, {
+      name: 'CV Full Stack EN',
+      category: 'software-engineering',
+      language: 'en',
+      isDefault: true,
+    });
+    const frontend = await resumeRepo.createResume(profile.id, {
+      name: 'CV Frontend EN',
+      category: 'software-engineering',
+      language: 'en',
+      isDefault: false,
+    });
+    const backend = await resumeRepo.createResume(profile.id, {
+      name: 'CV Backend EN',
+      category: 'software-engineering',
+      language: 'en',
+      isDefault: false,
+    });
+
+    expect(new Set([fullStack.id, frontend.id, backend.id]).size).toBe(3);
+    const names = (await resumeRepo.listResumes()).map((row) => row.name).sort();
+    expect(names).toEqual(['CV Backend EN', 'CV Frontend EN', 'CV Full Stack EN']);
+  });
+
+  it('enforces the self-referencing parent_version_id foreign key', async () => {
+    const candidateRepo = createCandidateRepo(handle.db);
+    const resumeRepo = createResumeRepo(handle.db);
+    const profile = await candidateRepo.upsertProfile(profileInput);
+    const resume = await resumeRepo.createResume(profile.id, {
+      name: 'Engineering CV',
+      category: 'software-engineering',
+      language: 'en',
+      isDefault: true,
+    });
+
+    const v1 = await resumeRepo.createVersion(resume.id, {
+      kind: 'original',
+      storageKey: 'resumes/v1.txt',
+      fileHash: 'a'.repeat(64),
+    });
+    const v2 = await resumeRepo.createVersion(resume.id, {
+      kind: 'tailored',
+      parentVersionId: v1.id,
+      storageKey: 'resumes/v2.txt',
+      fileHash: 'b'.repeat(64),
+    });
+    expect(v2.parentVersionId).toBe(v1.id);
+
+    await expect(
+      resumeRepo.createVersion(resume.id, {
+        kind: 'tailored',
+        parentVersionId: '00000000-0000-7000-8000-000000000000',
+        storageKey: 'resumes/v3.txt',
+        fileHash: 'd'.repeat(64),
+      }),
+    ).rejects.toThrow();
+  });
 });
 
 describeDb('search repository', () => {

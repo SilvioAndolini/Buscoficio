@@ -8,6 +8,13 @@
       "when": 1789665420913,
       "tag": "0000_robust_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789693547978,
+      "tag": "0001_next_mojo",
+      "breakpoints": true
     }
   ]
 }

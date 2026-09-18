@@ -161,13 +161,9 @@ export const resume = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [
-    uniqueIndex('resume_candidate_category_language_uq').on(
-      table.candidateId,
-      table.category,
-      table.language,
-    ),
-  ],
+  // Multiple resumes may share category+language (e.g. Full Stack / Frontend /
+  // Backend CVs in the same language); no uniqueness on that combination.
+  (table) => [index('resume_candidate_idx').on(table.candidateId)],
 );
 
 export const resumeVersion = pgTable(
@@ -178,7 +174,9 @@ export const resumeVersion = pgTable(
       .notNull()
       .references(() => resume.id, { onDelete: 'cascade' }),
     versionNumber: integer('version_number').notNull(),
-    parentVersionId: uuid('parent_version_id'),
+    parentVersionId: uuid('parent_version_id').references((): AnyPgColumn => resumeVersion.id, {
+      onDelete: 'restrict',
+    }),
     kind: text('kind').notNull().default('original'),
     storageKey: text('storage_key').notNull(),
     fileHash: text('file_hash').notNull(),
@@ -188,6 +186,7 @@ export const resumeVersion = pgTable(
   (table) => [
     uniqueIndex('resume_version_resume_version_uq').on(table.resumeId, table.versionNumber),
     index('resume_version_resume_idx').on(table.resumeId),
+    index('resume_version_parent_idx').on(table.parentVersionId),
   ],
 );
 
