@@ -18,6 +18,8 @@ export interface MockJobSourceOptions {
   failSearch?: 'transient' | 'auth' | null;
   pageSize?: number;
   payloads?: RawJobPayload[];
+  /** Allows registering several deterministic mocks (mock-a, mock-b, ...). */
+  key?: string;
 }
 
 const DEFAULT_PAGE_SIZE = 4;
@@ -36,17 +38,19 @@ export function createMockJobSource(options: MockJobSourceOptions = {}): JobSour
   const payloads = options.payloads ?? MOCK_PAYLOADS;
   const pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
   const failSearch = options.failSearch ?? null;
+  const key = options.key ?? MOCK_SOURCE_KEY;
 
   const capabilities: SourceCapabilities = {
     requiresHumanLogin: false,
     supportsPagination: true,
     pageSize,
+    rateLimitPerMinute: 60,
   };
 
   const toRawJob = (payload: unknown, externalId: string): RawJob => {
     const parsed = RawJobPayloadSchema.safeParse(payload);
     return {
-      sourceKey: MOCK_SOURCE_KEY,
+      sourceKey: key,
       externalId,
       fetchedAt: MOCK_FIXTURE_FETCHED_AT,
       data: parsed.success ? parsed.data : payload,
@@ -54,7 +58,7 @@ export function createMockJobSource(options: MockJobSourceOptions = {}): JobSour
   };
 
   return {
-    key: MOCK_SOURCE_KEY,
+    key,
     capabilities,
 
     async searchJobs(query: SourceSearchQuery): Promise<SourceSearchResult> {
