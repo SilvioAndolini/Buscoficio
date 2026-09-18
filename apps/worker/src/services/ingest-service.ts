@@ -2,17 +2,24 @@ import {
   computeDedupKey,
   computeJobContentHash,
   computeUrlHash,
+  evaluateHardFilters,
   isAppError,
+  type HardFilterConfig,
   type IngestResult,
   type JobSourceAdapter,
   type RawJob,
   type TraceContext,
 } from '@job-system/core';
-import type { Clock } from '@job-system/core';
+import type { Clock, DedupThresholds } from '@job-system/core';
 import type { createJobRepo} from '@job-system/database';
 import { type IngestJobData } from '@job-system/database';
 
 export type JobRepo = ReturnType<typeof createJobRepo>;
+
+export interface IngestPolicy {
+  thresholds: DedupThresholds;
+  filters: HardFilterConfig;
+}
 
 export interface IngestServiceDeps {
   jobRepo: JobRepo;
@@ -20,9 +27,9 @@ export interface IngestServiceDeps {
 }
 
 /**
- * Ingest use case (orchestration lives in the composition root; persistence in
- * `@job-system/database`). Deterministic L0–L2 dedup, quarantine on malformed
- * payloads — a bad offer never aborts the batch.
+ * Ingest use case: deterministic L0–L3 dedup, ApplicationTarget resolution,
+ * hard eligibility filters (with explicit reasons) and quarantine for
+ * malformed payloads — a bad offer never aborts the batch.
  */
 export function createIngestService(deps: IngestServiceDeps) {
   async function ingestRaw(
@@ -30,6 +37,7 @@ export function createIngestService(deps: IngestServiceDeps) {
     adapter: JobSourceAdapter,
     sourceId: string,
     _trace: TraceContext,
+    policy: IngestPolicy,
   ): Promise<IngestResult> {
     let normalized;
     try {
@@ -59,7 +67,7 @@ export function createIngestService(deps: IngestServiceDeps) {
       const target = await deps.jobRepo.upsertTarget({
         key: detected.platformKey,
         kind: 'ats_browser',
-        platform: detected.platformKey,
+        platform: detected.platformKey.split('-')[0] ?? detected.platformKey,
         label: detected.platformKey,
         baseUrl: detected.baseUrl ?? null,
       });
@@ -90,8 +98,32 @@ export function createIngestService(deps: IngestServiceDeps) {
       }),
       discoveredAt: deps.clock.now(),
       raw: raw.data,
+      fuzzy: { thresholds: policy.thresholds },
     };
-    return deps.jobRepo.ingestJob(data);
+    const result = await deps.jobRepo.ingestJob(data);
+
+    if (result.outcome === 'duplicate' || result.jobId === null) return result;
+
+    const decision = evaluateHardFilters(
+      {
+        company: normalized.company,
+        title: normalized.title,
+        description: normalized.description,
+        location: normalized.location,
+        remoteType: normalized.remoteType,
+      },
+      policy.filters,
+    );
+    if (!decision.allowed) {
+      await deps.jobRepo.markJobRejected(result.jobId, decision);
+      return {
+        ...result,
+        outcome: 'rejected',
+        reasons: [...result.reasons, ...decision.rejections.map((r) => `${r.rule}: ${r.reason}`)],
+      };
+    }
+
+    return result;
   }
 
   return { ingestRaw };

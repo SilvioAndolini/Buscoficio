@@ -5,12 +5,24 @@ export { createSearchService, type SearchService } from './services/search-servi
 export {
   DEFAULT_JOB_OPTIONS,
   PHASE1_QUEUES,
+  QUEUE_DEDUP_REVIEW,
   QUEUE_INGEST,
   QUEUE_MAINTENANCE,
   QUEUE_SEARCH,
+  WORKER_QUEUES,
   createQueues,
   createRedisConnection,
   ingestSourceJobId,
   searchRunJobId,
-  type Phase1Queue,
+  type WorkerQueue,
 } from './queues.js';
+export { createRedisRateLimiter, type RateLimiter } from './services/rate-limiter.js';
+export {
+  computeSchedulerStart,
+  createSchedulerService,
+  type SchedulerService,
+} from './services/scheduler-service.js';
+export {
+  createReconciliationService,
+  type ReconciliationService,
+} from './services/reconciliation-service.js';

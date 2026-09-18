@@ -1,18 +1,34 @@
 import { Worker, type Job, type WorkerOptions } from 'bullmq';
 import type { Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
-import { systemClock } from '@job-system/core';
-import { createDb, createJobRepo, createSearchRepo, type DbHandle } from '@job-system/database';
-import { SourceRegistry, createMockJobSource } from '@job-system/job-sources';
+import { systemClock, type JobSourceAdapter } from '@job-system/core';
+import {
+  createDb,
+  createDedupRepo,
+  createJobRepo,
+  createSearchRepo,
+  type DbHandle,
+} from '@job-system/database';
+import {
+  SOURCE_POLICY_NOTES,
+  SourceRegistry,
+  createMockJobSource,
+  createRealSourceAdapters,
+} from '@job-system/job-sources';
 import { createJobLogger, type Logger } from '@job-system/observability';
-import { PHASE1_QUEUES, createQueues, createRedisConnection, type Phase1Queue } from './queues.js';
+import { WORKER_QUEUES, createQueues, createRedisConnection, type WorkerQueue } from './queues.js';
 import { createIngestService } from './services/ingest-service.js';
 import { createSearchService } from './services/search-service.js';
+import { createRedisRateLimiter } from './services/rate-limiter.js';
+import { createSchedulerService } from './services/scheduler-service.js';
+import { createReconciliationService } from './services/reconciliation-service.js';
 import { createJobHandlers, type JobHandlers } from './handlers.js';
 
 export interface WorkerRuntimeOptions {
   /** Isolates queues between test runs / environments. */
   queuePrefix?: string;
+  /** Override the adapter registry (tests / E2E local fixture servers). */
+  adapters?: JobSourceAdapter[];
 }
 
 export interface WorkerRuntime {
@@ -34,9 +50,11 @@ export async function startWorkerRuntime(
   const db = createDb(env.DATABASE_URL);
   const jobRepo = createJobRepo(db.db);
   const searchRepo = createSearchRepo(db.db);
+  const dedupRepo = createDedupRepo(db.db);
 
   const registry = new SourceRegistry();
-  registry.register(createMockJobSource());
+  const adapters = options.adapters ?? [createMockJobSource(), ...createRealSourceAdapters()];
+  for (const adapter of adapters) registry.register(adapter);
 
   for (const adapter of registry.list()) {
     await jobRepo.upsertSource({
@@ -44,8 +62,20 @@ export async function startWorkerRuntime(
       name: adapter.key,
       kind: 'api',
       capabilities: { ...adapter.capabilities },
+      policyNotes:
+        SOURCE_POLICY_NOTES[adapter.key] ??
+        (adapter.key.startsWith('mock')
+          ? 'mock source: deterministic fixtures for tests/dev; no external service'
+          : null),
     });
   }
+
+  const rateLimiterRedis = createRedisConnection(env.REDIS_URL);
+  const rateLimiter = createRedisRateLimiter(rateLimiterRedis, logger);
+  const thresholds = {
+    high: env.DEDUP_L3_HIGH_THRESHOLD,
+    medium: env.DEDUP_L3_MEDIUM_THRESHOLD,
+  };
 
   const ingestService = createIngestService({ jobRepo, clock: systemClock });
   const searchService = createSearchService({
@@ -55,16 +85,50 @@ export async function startWorkerRuntime(
     ingestService,
     logger,
     clock: systemClock,
+    rateLimiter,
+    thresholds,
   });
 
   const connection = createRedisConnection(env.REDIS_URL);
   const queues = createQueues(connection, options.queuePrefix);
-  const handlers = createJobHandlers({ queues, searchService, searchRepo, logger });
 
-  const workers = PHASE1_QUEUES.map((queueName: Phase1Queue) => {
+  const schedulerService = createSchedulerService({
+    queue: queues.search,
+    searchRepo,
+    logger,
+    enabled: env.SCHEDULER_ENABLED,
+  });
+  const reconciliationService = createReconciliationService({
+    searchRepo,
+    logger,
+    timeoutMs: env.WATCHDOG_TIMEOUT_MS,
+  });
+
+  const handlers = createJobHandlers({
+    queues,
+    searchService,
+    searchRepo,
+    schedulerService,
+    reconciliationService,
+    dedupRepo,
+    logger,
+  });
+
+  // Reconcile schedulers from Postgres (source of truth) and register watchdog.
+  await schedulerService.syncAll();
+  await queues.maintenance.upsertJobScheduler(
+    'maintenance-search-reconcile',
+    { every: 300_000 },
+    {
+      name: 'maintenance.search-reconcile',
+      opts: { attempts: 1, removeOnComplete: 100, removeOnFail: 100 },
+    },
+  );
+
+  const workers = WORKER_QUEUES.map((queueName: WorkerQueue) => {
     const workerOptions: WorkerOptions = {
       connection: createRedisConnection(env.REDIS_URL),
-      concurrency: queueName === 'maintenance' ? 1 : 2,
+      concurrency: queueName === 'maintenance' || queueName === 'dedup-review' ? 1 : 2,
       ...(options.queuePrefix === undefined ? {} : { prefix: options.queuePrefix }),
     };
     const worker = new Worker(
@@ -116,6 +180,7 @@ export async function startWorkerRuntime(
       await Promise.all(workers.map((worker) => worker.close()));
       await Promise.all(Object.values(queues).map((queue) => queue.close()));
       await connection.quit();
+      await rateLimiterRedis.quit();
       await db.pool.end();
     },
   };

@@ -13,20 +13,30 @@ export { ingestSourceJobId, searchRunJobId };
 export const QUEUE_SEARCH = 'search';
 export const QUEUE_INGEST = 'ingest';
 export const QUEUE_MAINTENANCE = 'maintenance';
-export const PHASE1_QUEUES = [QUEUE_SEARCH, QUEUE_INGEST, QUEUE_MAINTENANCE] as const;
+export const QUEUE_DEDUP_REVIEW = 'dedup-review';
+export const WORKER_QUEUES = [
+  QUEUE_SEARCH,
+  QUEUE_INGEST,
+  QUEUE_MAINTENANCE,
+  QUEUE_DEDUP_REVIEW,
+] as const;
 
-export type Phase1Queue = (typeof PHASE1_QUEUES)[number];
+export type WorkerQueue = (typeof WORKER_QUEUES)[number];
+
+/** Backwards-compatible alias (Phase 1 name). */
+export const PHASE1_QUEUES = WORKER_QUEUES;
 
 export function createRedisConnection(url: string): IORedis {
   return new IORedis(url, { maxRetriesPerRequest: null });
 }
 
-export function createQueues(connection: IORedis, prefix?: string): Record<Phase1Queue, Queue> {
+export function createQueues(connection: IORedis, prefix?: string): Record<WorkerQueue, Queue> {
   const options = prefix === undefined ? {} : { prefix };
   return {
     [QUEUE_SEARCH]: new Queue(QUEUE_SEARCH, { connection, ...options }),
     [QUEUE_INGEST]: new Queue(QUEUE_INGEST, { connection, ...options }),
     [QUEUE_MAINTENANCE]: new Queue(QUEUE_MAINTENANCE, { connection, ...options }),
+    [QUEUE_DEDUP_REVIEW]: new Queue(QUEUE_DEDUP_REVIEW, { connection, ...options }),
   };
 }
 

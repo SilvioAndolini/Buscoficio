@@ -44,6 +44,10 @@ const testEnv: Env = {
   AI_PROVIDER: 'mock',
   DECISION_PROVIDER: 'mock',
   AI_MONTHLY_BUDGET_USD: 0,
+  DEDUP_L3_HIGH_THRESHOLD: 0.92,
+  DEDUP_L3_MEDIUM_THRESHOLD: 0.75,
+  WATCHDOG_TIMEOUT_MS: 900_000,
+  SCHEDULER_ENABLED: true,
 };
 
 const profileInput: CandidateProfileInput = {
