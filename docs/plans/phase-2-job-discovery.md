@@ -74,3 +74,17 @@ Correcciones aplicadas y verificadas:
 - **Fuentes bloqueadas**: test que verifica `SearchSourceRun=skipped` con razón explícita.
 - **Wording ToS** corregido (sin afirmaciones legales absolutas) en constantes y `docs/producto/14`.
 
+## Fase 2.2 — bloqueadores finales (2026-09-18)
+
+- **Migración 0004** (`reviewed_at`, `reviewed_by`) y **0005** (sanitización legacy: bloquea targets
+  `active` sin `policy_notes`, preserva revisados y bloqueados; idempotente, forward-only).
+- **Policy review obligatoria** para `blocked → active`: `PATCH /v1/application-targets/:key` acepta
+  `policyReview.notes` (+`reference` opcional), persiste revisión con `reviewed_at` del servidor y
+  `reviewed_by='user'`, compone `policy_notes` y emite `application_target.policy_reviewed`. Sin
+  revisión → `422 POLICY_DENIED`. Transiciones restrictivas y reactivación de targets ya revisados no
+  exigen revisión nueva. La re-detección nunca altera autorización ni evidencia.
+- **Test de upgrade incremental real**: DB vacía → 0000–0003 → datos legacy (no revisado / revisado /
+  bloqueado) → 0004–0005 → verificación de cada caso + idempotencia. En CI junto al fresh install.
+- E2E API actualizado: rechazo sin review, activación con review (notas + reviewedAt/By persistidos +
+  audit), pause y reactivación reutilizando la revisión.
+

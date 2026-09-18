@@ -37,8 +37,17 @@ pipeline puede ejecutar **enrichment de redirects** (presupuesto por run + rate 
 - **Detección ≠ autorización**: todo target nuevo se crea en `status = blocked` con la nota
   “Submission authorization pending separate platform policy review”. El Job conserva el
   `applicationTargetId` (metadata de descubrimiento) aunque el target esté bloqueado.
-- La habilitación exige un acto humano explícito y auditado: `PATCH /v1/application-targets/:key`
-  (`blocked → active`); las re-detecciones nunca resetean el estado ni sobrescriben notas revisadas.
+- **NO POLICY REVIEW → NO ACTIVE TARGET**: activar (`blocked → active`) exige una revisión explícita
+  vía `PATCH /v1/application-targets/:key` con `policyReview.notes` (mín. 10 caracteres) y, opcionalmente,
+  `policyReview.reference`. El sistema persiste `reviewed_at` (reloj del servidor) y `reviewed_by`
+  (`user`) y compone `policy_notes` con la revisión real. La activación sin revisión responde
+  `422 POLICY_DENIED`. Transiciones restrictivas (`active→paused`, `active→blocked`, `paused→blocked`)
+  no requieren revisión nueva; reactivar un target previamente revisado reutiliza su evidencia.
+- **Auditoría**: la revisión genera `application_target.policy_reviewed` (targetKey, previousStatus,
+  newStatus, reviewedBy, reviewedAt, reference) y los cambios de estado `application_target.status_changed`.
+- **Legacy**: la migración `0005` bloquea los targets auto-detectados de Fase 2 que quedaron
+  `status='active'` con `policy_notes NULL` (sin evidencia de revisión), preservando intactos los que
+  sí tienen notas y los ya bloqueados. La migración es idempotente y forward-only.
 - Revisión por plataforma (greenhouse, lever, workday, ashby, workable, smartrecruiters) pendiente
   antes de habilitar envíos reales (Fases 5/6).
 

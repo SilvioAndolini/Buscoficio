@@ -64,6 +64,12 @@ enrichment conectado con presupuesto/rate-limit, taxonomía 401/403→`SourceAut
 en servicios de Fase 2, wording ToS corregido. Evidencia: 158 tests de integración + 2 E2E Playwright +
 CI `ci`/`e2e` en verde.
 
+**Fase 2.2 — bloqueadores finales verificados (2026-09-18):** targets legacy no revisados bloqueados
+por migración `0005` (revisados intactos; test de upgrade incremental 0000–0003 → 0004–0005),
+activación de targets condicionada a `policyReview` explícita (revisión persistida con `reviewed_at`
+del servidor y `reviewed_by`, audit `application_target.policy_reviewed`; sin revisión → `422
+POLICY_DENIED`). Evidencia: 160 tests de integración + 2 E2E Playwright + CI `ci`/`e2e` en verde.
+
 ## Fase 3 — Matching
 
 **Objetivo:** ranking explicable, versionado y reproducible con espacios de embeddings.
