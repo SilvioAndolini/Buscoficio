@@ -2,6 +2,7 @@ import {
   DEFAULT_HTTP_TIMEOUT_MS,
   DEFAULT_MAX_REDIRECTS,
   RateLimitedError,
+  SourceAuthError,
   SourcePermanentError,
   SourceTransientError,
   type HttpClient,
@@ -21,16 +22,24 @@ function parseRetryAfter(value: string | null): number | null {
   return null;
 }
 
+export interface FetchHttpClientOptions {
+  /** Test seam: replace global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
 /**
  * fetch-based HttpClient: manual redirect chain (needed for ATS/target
- * detection), timeouts, Retry-After aware rate-limit errors. No evasion
- * techniques: fixed user agent, no fingerprint spoofing, no proxies.
+ * detection), timeouts, Retry-After aware rate-limit errors and explicit
+ * auth error classification (401/403). No evasion techniques: fixed user
+ * agent, no fingerprint spoofing, no proxies.
  */
-export function createFetchHttpClient(): HttpClient {
+export function createFetchHttpClient(options: FetchHttpClientOptions = {}): HttpClient {
+  const fetchImpl = options.fetchImpl ?? fetch;
+
   return {
-    async request(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
-      const timeoutMs = options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-      const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+    async request(url: string, requestOptions: HttpRequestOptions = {}): Promise<HttpResponse> {
+      const timeoutMs = requestOptions.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+      const maxRedirects = requestOptions.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
       const deadline = Date.now() + timeoutMs;
       const redirects: string[] = [];
       let current = url;
@@ -40,13 +49,13 @@ export function createFetchHttpClient(): HttpClient {
         const timer = setTimeout(() => controller.abort(), Math.max(1, deadline - Date.now()));
         let response: Response;
         try {
-          response = await fetch(current, {
+          response = await fetchImpl(current, {
             redirect: 'manual',
             signal: controller.signal,
             headers: {
               'user-agent': USER_AGENT,
               accept: 'application/json, text/plain;q=0.9, text/html;q=0.8',
-              ...options.headers,
+              ...requestOptions.headers,
             },
           });
         } catch (error) {
@@ -65,10 +74,24 @@ export function createFetchHttpClient(): HttpClient {
           }
           const next = new URL(location, current).toString();
           redirects.push(next);
+          if (requestOptions.stopWhen?.(next)) {
+            return {
+              status: response.status,
+              headers: Object.fromEntries(response.headers.entries()),
+              body: '',
+              finalUrl: next,
+              redirects,
+            };
+          }
           current = next;
           continue;
         }
 
+        if (response.status === 401 || response.status === 403) {
+          throw new SourceAuthError(`Authentication/authorization required by ${current}`, {
+            context: { status: response.status },
+          });
+        }
         if (response.status === 429) {
           throw new RateLimitedError(`Rate limited by ${current}`, {
             context: { status: 429, retryAfterMs: parseRetryAfter(response.headers.get('retry-after')) },

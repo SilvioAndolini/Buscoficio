@@ -16,13 +16,14 @@ import {
 import { createFetchHttpClient } from '../http/fetch-client.js';
 import { htmlToText, parseJobType, parseSalaryRange } from '../util/text.js';
 import { detectAtsFromUrl } from '../util/targets.js';
+import { evaluateSearchQuery } from '../util/search-query.js';
 
 export const REMOTIVE_POLICY_NOTES = [
   'method: public JSON API (remotive.com/api/remote-jobs)',
   'reviewed: 2026-09-18',
-  'limitations: attribution/link-back expected; no website scraping needed',
-  'automation: permitted for personal job search; no CAPTCHA/anti-bot bypass',
-  'rate limits: none published; self-imposed conservative limit (10 req/min)',
+  'terms: Public API available. Usage subject to provider terms and attribution/link-back expectations. Used for personal job discovery.',
+  'no CAPTCHA/anti-bot bypass; client uses an identifying User-Agent as a transparency measure',
+  'rate limit: self-imposed 10 req/min (none published)',
 ].join('; ');
 
 const RemotiveJobSchema = z.object({
@@ -84,8 +85,25 @@ export function createRemotiveAdapter(options: RemotiveOptions = {}): JobSourceA
 
     async searchJobs(query: SourceSearchQuery): Promise<SourceSearchResult> {
       const jobs = await fetchPage(query);
+      // Server-side search is used as a hint; the deterministic local matcher
+      // is the authority so SearchConfig (keywords/locations/remote) is always
+      // respected, even if the provider matches loosely.
+      const relevant = jobs.filter(
+        (job) =>
+          evaluateSearchQuery(
+            {
+              title: job.title,
+              description: htmlToText(job.description),
+              company: job.company_name,
+              tags: job.tags ?? [],
+              location: job.candidate_required_location ?? null,
+              remoteType: 'remote',
+            },
+            query,
+          ).matches,
+      );
       return {
-        jobs: jobs.map((job) => ({
+        jobs: relevant.map((job) => ({
           sourceKey: 'remotive',
           externalId: String(job.id),
           fetchedAt: new Date(),
@@ -141,6 +159,11 @@ export function createRemotiveAdapter(options: RemotiveOptions = {}): JobSourceA
       if (!parsed.success) return null;
       const detected = detectAtsFromUrl(parsed.data.url);
       return detected ? { platformKey: detected.key, signal: 'metadata' } : null;
+    },
+
+    resolveTargetUrl(raw: RawJob): string | null {
+      const parsed = RemotiveJobSchema.safeParse(raw.data);
+      return parsed.success ? parsed.data.url : null;
     },
   };
 }

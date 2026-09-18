@@ -20,9 +20,17 @@ export {
   parseJobType,
   parseSalaryRange,
   positiveOrNull,
+  ATS_TARGET_DEFAULT_POLICY_NOTE,
+  ATS_TARGET_POLICY_NOTES,
+  targetPolicyNotes,
+  detectAtsFromUrl,
+  detectAtsFromUrls,
+  evaluateSearchQuery,
+  type DetectedAtsTarget,
   type ParsedSalary,
-} from './util/text.js';
-export { detectAtsFromUrl, detectAtsFromUrls, type DetectedAtsTarget } from './util/targets.js';
+  type SearchQueryMatch,
+  type SearchableView,
+} from './util/index.js';
 export {
   ARBEITNOW_POLICY_NOTES,
   REMOTIVE_POLICY_NOTES,

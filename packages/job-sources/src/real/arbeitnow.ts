@@ -16,13 +16,14 @@ import {
 import { createFetchHttpClient } from '../http/fetch-client.js';
 import { htmlToText, parseJobType } from '../util/text.js';
 import { detectAtsFromUrl } from '../util/targets.js';
+import { evaluateSearchQuery } from '../util/search-query.js';
 
 export const ARBEITNOW_POLICY_NOTES = [
   'method: public JSON API (arbeitnow.com/api/job-board-api, paginated)',
   'reviewed: 2026-09-18',
-  'limitations: public job board feed; link back to the offer page',
-  'automation: permitted for personal job search; no CAPTCHA/anti-bot bypass',
-  'rate limits: none published; self-imposed conservative limit (10 req/min)',
+  'terms: Public API available. Usage subject to provider terms and link-back expectations. Used for personal job discovery.',
+  'no CAPTCHA/anti-bot bypass; client uses an identifying User-Agent as a transparency measure',
+  'rate limit: self-imposed 10 req/min (none published)',
 ].join('; ');
 
 const ArbeitnowJobSchema = z.object({
@@ -91,8 +92,24 @@ export function createArbeitnowAdapter(options: ArbeitnowOptions = {}): JobSourc
     async searchJobs(query: SourceSearchQuery): Promise<SourceSearchResult> {
       const page = query.page < 1 ? 1 : query.page;
       const result = await fetchPage(page);
+      // The provider has no server-side query parameters: apply the
+      // deterministic local matcher so SearchConfig is respected.
+      const relevant = result.jobs.filter(
+        (job) =>
+          evaluateSearchQuery(
+            {
+              title: job.title,
+              description: htmlToText(job.description),
+              company: job.company_name,
+              tags: job.tags,
+              location: job.location.length > 0 ? job.location : null,
+              remoteType: job.remote ? 'remote' : 'onsite',
+            },
+            query,
+          ).matches,
+      );
       return {
-        jobs: result.jobs.map((job) => ({
+        jobs: relevant.map((job) => ({
           sourceKey: 'arbeitnow',
           externalId: job.slug,
           fetchedAt: new Date(),
@@ -151,6 +168,11 @@ export function createArbeitnowAdapter(options: ArbeitnowOptions = {}): JobSourc
       if (!parsed.success) return null;
       const detected = detectAtsFromUrl(parsed.data.url);
       return detected ? { platformKey: detected.key, signal: 'metadata' } : null;
+    },
+
+    resolveTargetUrl(raw: RawJob): string | null {
+      const parsed = ArbeitnowJobSchema.safeParse(raw.data);
+      return parsed.success ? parsed.data.url : null;
     },
   };
 }

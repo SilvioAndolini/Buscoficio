@@ -2,7 +2,16 @@
  * Deterministic ATS detection from URLs (redirects, apply links, metadata).
  * Discovery source and submission target are different concepts (ADR-013);
  * this helper only maps a URL to the submission platform/key.
+ *
+ * Policy-note defaults live in core (`jobs/targets.ts`) and are re-exported
+ * here for adapter/composition convenience.
  */
+export {
+  ATS_TARGET_DEFAULT_POLICY_NOTE,
+  ATS_TARGET_POLICY_NOTES,
+  targetPolicyNotes,
+} from '@job-system/core';
+
 export interface DetectedAtsTarget {
   platform: string;
   key: string;

@@ -11,6 +11,7 @@ import {
   type SourceSearchResult,
 } from '@job-system/core';
 import { RawJobPayloadSchema, normalizeJob, type RawJobPayload } from '../normalize.js';
+import { evaluateSearchQuery } from '../util/search-query.js';
 import { MOCK_FIXTURE_FETCHED_AT, MOCK_SOURCE_KEY, MOCK_PAYLOADS } from './fixtures.js';
 
 export interface MockJobSourceOptions {
@@ -20,15 +21,10 @@ export interface MockJobSourceOptions {
   payloads?: RawJobPayload[];
   /** Allows registering several deterministic mocks (mock-a, mock-b, ...). */
   key?: string;
+  rateLimitPerMinute?: number;
 }
 
 const DEFAULT_PAGE_SIZE = 4;
-
-function matchesKeywords(payload: RawJobPayload, keywords: string[]): boolean {
-  if (keywords.length === 0) return true;
-  const haystack = `${payload.title} ${payload.description} ${payload.company}`.toLowerCase();
-  return keywords.some((keyword) => haystack.includes(keyword.trim().toLowerCase()));
-}
 
 /**
  * Deterministic mock discovery source (Phase 1). Implements the official
@@ -44,7 +40,7 @@ export function createMockJobSource(options: MockJobSourceOptions = {}): JobSour
     requiresHumanLogin: false,
     supportsPagination: true,
     pageSize,
-    rateLimitPerMinute: 60,
+    rateLimitPerMinute: options.rateLimitPerMinute ?? 60,
   };
 
   const toRawJob = (payload: unknown, externalId: string): RawJob => {
@@ -71,7 +67,20 @@ export function createMockJobSource(options: MockJobSourceOptions = {}): JobSour
       if (query.page < 1) {
         throw new ValidationError('page must be >= 1');
       }
-      const matched = payloads.filter((payload) => matchesKeywords(payload, query.keywords));
+      const matched = payloads.filter(
+        (payload) =>
+          evaluateSearchQuery(
+            {
+              title: payload.title,
+              description: payload.description,
+              company: payload.company,
+              tags: [],
+              location: payload.location,
+              remoteType: payload.remote,
+            },
+            query,
+          ).matches,
+      );
       const start = (query.page - 1) * pageSize;
       const pageItems = matched.slice(start, start + pageSize);
       return {

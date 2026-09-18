@@ -16,13 +16,14 @@ import {
 import { createFetchHttpClient } from '../http/fetch-client.js';
 import { htmlToText, positiveOrNull } from '../util/text.js';
 import { detectAtsFromUrls } from '../util/targets.js';
+import { evaluateSearchQuery } from '../util/search-query.js';
 
 export const REMOTEOK_POLICY_NOTES = [
   'method: public JSON API (remoteok.com/api)',
   'reviewed: 2026-09-18',
-  'limitations: link-back/attribution required; identifying User-Agent mandatory',
-  'automation: permitted for personal job search; no CAPTCHA/anti-bot bypass',
-  'rate limits: none published; self-imposed very conservative limit (6 req/min)',
+  'terms: Public API available. Attribution/link-back required by the provider. Used for personal job discovery.',
+  'no CAPTCHA/anti-bot bypass; client uses an identifying User-Agent as a transparency measure',
+  'rate limit: self-imposed 6 req/min (none published)',
 ].join('; ');
 
 const RemoteOkItemSchema = z.object({
@@ -95,12 +96,28 @@ export function createRemoteOkAdapter(options: RemoteOkOptions = {}): JobSourceA
     key: 'remoteok',
     capabilities,
 
-    async searchJobs(_query: SourceSearchQuery): Promise<SourceSearchResult> {
+    async searchJobs(query: SourceSearchQuery): Promise<SourceSearchResult> {
       const items = await fetchItems();
       const jobs: RawJob[] = [];
       for (const item of items) {
         const externalId = externalIdOf(item);
         if (!externalId) continue;
+        const parsed = RemoteOkItemSchema.safeParse(item);
+        if (!parsed.success) continue;
+        // No server-side query parameters: deterministic local matcher.
+        const matches = evaluateSearchQuery(
+          {
+            title: parsed.data.position,
+            description: htmlToText(parsed.data.description),
+            company: parsed.data.company,
+            tags: parsed.data.tags ?? [],
+            location:
+              parsed.data.location && parsed.data.location.length > 0 ? parsed.data.location : null,
+            remoteType: 'remote',
+          },
+          query,
+        ).matches;
+        if (!matches) continue;
         jobs.push({ sourceKey: 'remoteok', externalId, fetchedAt: new Date(), data: item });
       }
       return { jobs, page: 1, hasMore: false };
@@ -164,6 +181,12 @@ export function createRemoteOkAdapter(options: RemoteOkOptions = {}): JobSourceA
       if (!parsed.success) return null;
       const detected = detectAtsFromUrls([...(raw.redirects ?? []), parsed.data.apply_url, parsed.data.url]);
       return detected ? { platformKey: detected.target.key, signal: 'metadata' } : null;
+    },
+
+    resolveTargetUrl(raw: RawJob): string | null {
+      const parsed = RemoteOkItemSchema.safeParse(raw.data);
+      if (!parsed.success) return null;
+      return parsed.data.apply_url ?? parsed.data.url ?? null;
     },
   };
 }
