@@ -80,6 +80,47 @@ export function createJobRepo(db: Db) {
       return db.select().from(t.applicationTarget).orderBy(t.applicationTarget.key);
     },
 
+    async getTargetByKey(key: string) {
+      const [row] = await db
+        .select()
+        .from(t.applicationTarget)
+        .where(eq(t.applicationTarget.key, key))
+        .limit(1);
+      return row ?? null;
+    },
+
+    /**
+     * Explicit policy/ToS review: the ONLY way to authorize a target for
+     * submission. reviewedAt is system-generated and the review is persisted
+     * as structured policy notes (detection != authorization).
+     */
+    async applyPolicyReview(
+      key: string,
+      review: { notes: string; reference?: string | null; actor: string; now: Date },
+    ) {
+      const composedNotes = [
+        'Auto-detected.',
+        `Review completed ${review.now.toISOString()} by ${review.actor}.`,
+        review.notes.trim(),
+        ...(review.reference === undefined || review.reference === null
+          ? []
+          : [`Reference: ${review.reference}`]),
+      ].join('\n');
+      const [row] = await db
+        .update(t.applicationTarget)
+        .set({
+          status: 'active',
+          policyNotes: composedNotes,
+          reviewedAt: review.now,
+          reviewedBy: review.actor,
+          updatedAt: new Date(),
+        })
+        .where(eq(t.applicationTarget.key, key))
+        .returning();
+      if (!row) throw new NotFoundError(`Application target not found: ${key}`);
+      return row;
+    },
+
     async updateSourceStatus(key: string, status: 'active' | 'paused' | 'blocked') {
       const [row] = await db
         .update(t.jobSource)

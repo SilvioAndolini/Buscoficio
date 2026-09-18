@@ -374,9 +374,20 @@ describeDb('ingest idempotency (L0–L2)', () => {
     expect(reDetected.status).toBe('blocked');
     expect(reDetected.policyNotes).toBe(detected.policyNotes);
 
-    // Explicit (audited at API level) review authorizes submission later.
-    const authorized = await repo.updateTargetStatus('greenhouse-acme', 'active');
+    // Explicit (audited at API level) policy review authorizes submission.
+    const reviewTime = new Date('2026-09-18T10:00:00.000Z');
+    const authorized = await repo.applyPolicyReview('greenhouse-acme', {
+      notes: 'Reviewed provider/platform terms for personal discovery.',
+      actor: 'user',
+      now: reviewTime,
+    });
     expect(authorized.status).toBe('active');
+    expect(authorized.reviewedBy).toBe('user');
+    expect(authorized.reviewedAt?.toISOString()).toBe(reviewTime.toISOString());
+    expect(authorized.policyNotes).toContain('Review completed');
+    expect(authorized.policyNotes).toContain('Reviewed provider/platform terms');
+
+    // Re-detection must never change authorization or review evidence.
     const after = await repo.upsertTarget({
       key: 'greenhouse-acme',
       kind: 'ats_browser',
@@ -384,6 +395,9 @@ describeDb('ingest idempotency (L0–L2)', () => {
       label: 'greenhouse-acme',
     });
     expect(after.status).toBe('active');
+    expect(after.reviewedAt?.toISOString()).toBe(reviewTime.toISOString());
+    expect(after.reviewedBy).toBe('user');
+    expect(after.policyNotes).toBe(authorized.policyNotes);
 
     // Discovery association still works with a blocked target.
     const blockedTarget = await repo.upsertTarget({
@@ -398,6 +412,11 @@ describeDb('ingest idempotency (L0–L2)', () => {
     });
     const { job } = await repo.getJobWithListings(result.jobId!);
     expect(job.applicationTargetId).toBe(blockedTarget.id);
+
+    // Restrictive transitions never require a review.
+    const paused = await repo.updateTargetStatus('lever-globex', 'paused');
+    expect(paused.status).toBe('paused');
+    expect(paused.reviewedAt).toBeNull();
   });
 
   it('is concurrency-safe under L3 HIGH: equivalent offers merge into one canonical job', async () => {

@@ -224,6 +224,9 @@ export const applicationTarget = pgTable(
     // Auto-detected targets start blocked: detection is not authorization.
     status: text('status').notNull().default('blocked'),
     policyNotes: text('policy_notes'),
+    // Explicit policy/ToS review evidence required to authorize submission.
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewedBy: text('reviewed_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

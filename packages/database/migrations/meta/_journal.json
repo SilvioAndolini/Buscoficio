@@ -29,6 +29,20 @@
       "when": 1789746305552,
       "tag": "0003_stormy_lizard",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789749146556,
+      "tag": "0004_useful_manta",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789749160910,
+      "tag": "0005_sanitize_legacy_application_targets",
+      "breakpoints": true
     }
   ]
 }
