@@ -11,19 +11,24 @@ import {
   type TraceContext,
 } from '@job-system/core';
 import type { Clock, DedupThresholds } from '@job-system/core';
-import type { createJobRepo} from '@job-system/database';
-import { type IngestJobData } from '@job-system/database';
+import type { createJobRepo } from '@job-system/database';
+import type { IngestJobData } from '@job-system/database';
+import type { Logger } from '@job-system/observability';
+import type { EnrichmentBudget, TargetEnrichmentService } from './target-enrichment-service.js';
 
 export type JobRepo = ReturnType<typeof createJobRepo>;
 
 export interface IngestPolicy {
   thresholds: DedupThresholds;
   filters: HardFilterConfig;
+  /** Present when the run allows redirect-based target enrichment. */
+  enrichmentBudget?: EnrichmentBudget;
 }
 
 export interface IngestServiceDeps {
   jobRepo: JobRepo;
   clock: Clock;
+  enrichment?: TargetEnrichmentService;
 }
 
 /**
@@ -38,6 +43,7 @@ export function createIngestService(deps: IngestServiceDeps) {
     sourceId: string,
     _trace: TraceContext,
     policy: IngestPolicy,
+    logger: Logger,
   ): Promise<IngestResult> {
     let normalized;
     try {
@@ -60,7 +66,20 @@ export function createIngestService(deps: IngestServiceDeps) {
       throw error;
     }
 
-    const detected = adapter.detectApplicationTarget(raw);
+    let detected = adapter.detectApplicationTarget(raw);
+    if (!detected && deps.enrichment && policy.enrichmentBudget && adapter.resolveTargetUrl) {
+      const url = adapter.resolveTargetUrl(raw);
+      if (url) {
+        detected = await deps.enrichment.enrich({
+          url,
+          sourceKey: adapter.key,
+          limitPerMinute: adapter.capabilities.rateLimitPerMinute ?? 30,
+          logger,
+          budget: policy.enrichmentBudget,
+        });
+      }
+    }
+
     let applicationTargetId: string | null = null;
     let applicationTargetSignal: string | null = null;
     if (detected) {

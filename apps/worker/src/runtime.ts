@@ -1,7 +1,7 @@
 import { Worker, type Job, type WorkerOptions } from 'bullmq';
 import type { Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
-import { systemClock, type JobSourceAdapter } from '@job-system/core';
+import { systemClock, type HttpClient, type JobSourceAdapter } from '@job-system/core';
 import {
   createDb,
   createDedupRepo,
@@ -12,6 +12,7 @@ import {
 import {
   SOURCE_POLICY_NOTES,
   SourceRegistry,
+  createFetchHttpClient,
   createMockJobSource,
   createRealSourceAdapters,
 } from '@job-system/job-sources';
@@ -20,6 +21,7 @@ import { WORKER_QUEUES, createQueues, createRedisConnection, type WorkerQueue } 
 import { createIngestService } from './services/ingest-service.js';
 import { createSearchService } from './services/search-service.js';
 import { createRedisRateLimiter } from './services/rate-limiter.js';
+import { createTargetEnrichmentService } from './services/target-enrichment-service.js';
 import { createSchedulerService } from './services/scheduler-service.js';
 import { createReconciliationService } from './services/reconciliation-service.js';
 import { createJobHandlers, type JobHandlers } from './handlers.js';
@@ -29,6 +31,10 @@ export interface WorkerRuntimeOptions {
   queuePrefix?: string;
   /** Override the adapter registry (tests / E2E local fixture servers). */
   adapters?: JobSourceAdapter[];
+  /** Override the HTTP client used for target enrichment. */
+  http?: HttpClient;
+  /** Rate-limit window (tests use short windows). */
+  rateLimitWindowMs?: number;
 }
 
 export interface WorkerRuntime {
@@ -71,13 +77,17 @@ export async function startWorkerRuntime(
   }
 
   const rateLimiterRedis = createRedisConnection(env.REDIS_URL);
-  const rateLimiter = createRedisRateLimiter(rateLimiterRedis, logger);
+  const rateLimiter = createRedisRateLimiter(rateLimiterRedis, logger, {
+    ...(options.rateLimitWindowMs === undefined ? {} : { windowMs: options.rateLimitWindowMs }),
+  });
   const thresholds = {
     high: env.DEDUP_L3_HIGH_THRESHOLD,
     medium: env.DEDUP_L3_MEDIUM_THRESHOLD,
   };
 
-  const ingestService = createIngestService({ jobRepo, clock: systemClock });
+  const http = options.http ?? createFetchHttpClient();
+  const enrichment = createTargetEnrichmentService({ http, rateLimiter });
+  const ingestService = createIngestService({ jobRepo, clock: systemClock, enrichment });
   const searchService = createSearchService({
     searchRepo,
     jobRepo,
@@ -87,6 +97,7 @@ export async function startWorkerRuntime(
     clock: systemClock,
     rateLimiter,
     thresholds,
+    enrichmentMaxPerRun: env.TARGET_ENRICHMENT_MAX_PER_RUN,
   });
 
   const connection = createRedisConnection(env.REDIS_URL);

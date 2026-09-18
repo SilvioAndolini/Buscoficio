@@ -20,7 +20,7 @@ export interface ReconciliationResult {
  */
 export function createReconciliationService(deps: ReconciliationServiceDeps) {
   return {
-    async reconcileStaleRuns(): Promise<ReconciliationResult> {
+    async reconcileStaleRuns(logger: Logger = deps.logger): Promise<ReconciliationResult> {
       const staleRuns = await deps.searchRepo.listStaleRuns(deps.timeoutMs);
       let recovered = 0;
       let failedSources = 0;
@@ -38,7 +38,7 @@ export function createReconciliationService(deps: ReconciliationServiceDeps) {
         }
         const result = await deps.searchRepo.finalizeRun(run.id);
         recovered += 1;
-        deps.logger.warn(
+        logger.warn(
           {
             searchRunId: run.id,
             failedSources: running.length,

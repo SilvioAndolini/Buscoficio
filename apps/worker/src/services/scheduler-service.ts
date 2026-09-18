@@ -34,9 +34,9 @@ export function computeSchedulerStart(configId: string, intervalMs: number, now 
  */
 export function createSchedulerService(deps: SchedulerServiceDeps) {
   return {
-    async syncAll(): Promise<SchedulerSyncResult> {
+    async syncAll(logger: Logger = deps.logger): Promise<SchedulerSyncResult> {
       if (!deps.enabled) {
-        deps.logger.info('scheduler disabled (SCHEDULER_ENABLED=false); no schedulers synced');
+        logger.info('scheduler disabled (SCHEDULER_ENABLED=false); no schedulers synced');
         return { upserted: 0, removed: 0, skipped: true };
       }
 
@@ -70,7 +70,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps) {
         }
       }
 
-      deps.logger.info({ upserted, removed }, 'search schedulers synchronized');
+      logger.info({ upserted, removed }, 'search schedulers synchronized');
       return { upserted, removed, skipped: false };
     },
   };

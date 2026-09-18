@@ -18,6 +18,11 @@ export {
 } from './queues.js';
 export { createRedisRateLimiter, type RateLimiter } from './services/rate-limiter.js';
 export {
+  createTargetEnrichmentService,
+  type EnrichmentBudget,
+  type TargetEnrichmentService,
+} from './services/target-enrichment-service.js';
+export {
   computeSchedulerStart,
   createSchedulerService,
   type SchedulerService,

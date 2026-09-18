@@ -12,14 +12,25 @@ export interface RateLimitAcquireResult {
 }
 
 export interface RateLimiter {
-  acquire(sourceKey: string, operation: string, limitPerMinute: number): Promise<RateLimitAcquireResult>;
-  penalize(sourceKey: string, operation: string, retryAfterMs: number | null): Promise<void>;
+  acquire(
+    sourceKey: string,
+    operation: string,
+    limitPerMinute: number,
+    logger?: Logger,
+  ): Promise<RateLimitAcquireResult>;
+  penalize(
+    sourceKey: string,
+    operation: string,
+    retryAfterMs: number | null,
+    logger?: Logger,
+  ): Promise<void>;
 }
 
 /**
  * Self-imposed rate limiting per source + operation (Redis fixed window with
  * Retry-After penalties). It only throttles our own requests — never bypasses
- * external limits.
+ * external limits. Callers may pass a job-scoped child logger so rate-limit
+ * events keep correlationId/jobId/sourceId.
  */
 export function createRedisRateLimiter(
   redis: IORedis,
@@ -34,7 +45,8 @@ export function createRedisRateLimiter(
   };
 
   return {
-    async acquire(sourceKey, operation, limitPerMinute): Promise<RateLimitAcquireResult> {
+    async acquire(sourceKey, operation, limitPerMinute, scopedLogger): Promise<RateLimitAcquireResult> {
+      const log = scopedLogger ?? logger;
       const bucket = `${sourceKey}:${operation}`;
       let waitedMs = 0;
 
@@ -58,7 +70,7 @@ export function createRedisRateLimiter(
 
         await redis.incr('rate:limit:blocked:total');
         const wait = Math.max(50, (window + 1) * windowMs - Date.now() + 50);
-        logger.warn(
+        log.warn(
           { sourceKey, operation, limitPerMinute, waitMs: Math.min(wait, maxWaitMs) },
           'self-imposed rate limit reached; delaying source request',
         );
@@ -67,11 +79,12 @@ export function createRedisRateLimiter(
       }
     },
 
-    async penalize(sourceKey, operation, retryAfterMs): Promise<void> {
+    async penalize(sourceKey, operation, retryAfterMs, scopedLogger): Promise<void> {
+      const log = scopedLogger ?? logger;
       const ms = Math.min(Math.max(1000, retryAfterMs ?? 60_000), 15 * 60_000);
       await redis.set(`rate:blocked:${sourceKey}:${operation}`, '1', 'PX', ms);
       await redis.incr('rate:limit:blocked:total');
-      logger.warn({ sourceKey, operation, retryAfterMs: ms }, 'external rate limit penalty applied');
+      log.warn({ sourceKey, operation, retryAfterMs: ms }, 'external rate limit penalty applied');
     },
   };
 }

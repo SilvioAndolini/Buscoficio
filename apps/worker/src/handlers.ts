@@ -129,13 +129,13 @@ export function createJobHandlers(deps: JobHandlerDeps) {
     },
 
     'scheduler.sync': async (_job: Job, logger: Logger) => {
-      const result = await deps.schedulerService.syncAll();
+      const result = await deps.schedulerService.syncAll(logger);
       logger.info(result, 'scheduler sync completed');
       return result;
     },
 
     'maintenance.search-reconcile': async (_job: Job, logger: Logger) => {
-      const result = await deps.reconciliationService.reconcileStaleRuns();
+      const result = await deps.reconciliationService.reconcileStaleRuns(logger);
       logger.info(result, 'watchdog reconciliation completed');
       return result;
     },

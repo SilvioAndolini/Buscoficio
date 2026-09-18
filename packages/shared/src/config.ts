@@ -44,6 +44,8 @@ export const EnvSchema = z.object({
   DEDUP_L3_MEDIUM_THRESHOLD: z.coerce.number().min(0).max(1).default(0.75),
   WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(10_000).default(900_000),
   SCHEDULER_ENABLED: booleanFromEnv(true),
+  /** Max redirect-enrichment requests per source run (0 disables it). */
+  TARGET_ENRICHMENT_MAX_PER_RUN: z.coerce.number().int().min(0).default(25),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

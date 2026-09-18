@@ -22,6 +22,8 @@ export interface SearchServiceDeps {
   clock: Clock;
   rateLimiter: RateLimiter;
   thresholds: DedupThresholds;
+  /** Max redirect-enrichment requests per source run (0 disables). */
+  enrichmentMaxPerRun: number;
 }
 
 export interface SourceCounters {
@@ -136,7 +138,13 @@ export function createSearchService(deps: SearchServiceDeps) {
       const sourceRun = sourceRuns.find((entry) => entry.sourceKey === input.sourceKey)?.run;
       if (!sourceRun) throw new Error(`Source run missing for '${input.sourceKey}'`);
 
-      const policy = { thresholds: deps.thresholds, filters: parseFilters(config.filters) };
+      const policy = {
+        thresholds: deps.thresholds,
+        filters: parseFilters(config.filters),
+        ...(deps.enrichmentMaxPerRun > 0
+          ? { enrichmentBudget: { remaining: deps.enrichmentMaxPerRun } }
+          : {}),
+      };
       const limitPerMinute = adapter.capabilities.rateLimitPerMinute ?? 30;
       const startedAt = Date.now();
       const counters: SourceCounters = { discovered: 0, new: 0, duplicated: 0, rejected: 0, errors: 0 };
@@ -146,7 +154,7 @@ export function createSearchService(deps: SearchServiceDeps) {
         let page = 1;
         let hasMore = true;
         while (hasMore && page <= MAX_PAGES) {
-          await deps.rateLimiter.acquire(input.sourceKey, 'search', limitPerMinute);
+          await deps.rateLimiter.acquire(input.sourceKey, 'search', limitPerMinute, sourceLogger);
           const result = await adapter.searchJobs({
             keywords: config.keywords,
             locations: config.locations,
@@ -162,6 +170,7 @@ export function createSearchService(deps: SearchServiceDeps) {
               sourceRow.id,
               trace,
               policy,
+              sourceLogger,
             );
             if (ingestResult.reviewId) reviewIds.push(ingestResult.reviewId);
             if (ingestResult.outcome === 'new') counters.new += 1;
@@ -201,6 +210,7 @@ export function createSearchService(deps: SearchServiceDeps) {
             input.sourceKey,
             'search',
             typeof retryAfterMs === 'number' ? retryAfterMs : null,
+            sourceLogger,
           );
         }
 

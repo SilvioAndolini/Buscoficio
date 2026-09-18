@@ -48,6 +48,7 @@ const testEnv: Env = {
   DEDUP_L3_MEDIUM_THRESHOLD: 0.75,
   WATCHDOG_TIMEOUT_MS: 900_000,
   SCHEDULER_ENABLED: true,
+  TARGET_ENRICHMENT_MAX_PER_RUN: 25,
 };
 
 const profileInput: CandidateProfileInput = {

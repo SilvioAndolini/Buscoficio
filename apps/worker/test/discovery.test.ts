@@ -51,6 +51,7 @@ const testEnv: Env = {
   DEDUP_L3_MEDIUM_THRESHOLD: 0.75,
   WATCHDOG_TIMEOUT_MS: 900_000,
   SCHEDULER_ENABLED: true,
+  TARGET_ENRICHMENT_MAX_PER_RUN: 25,
 };
 
 const profileInput: CandidateProfileInput = {
@@ -189,12 +190,31 @@ describeIntegration('scheduler: Postgres is the source of truth', () => {
       const schedulers = await queues.search.getJobSchedulers(0, 1_000, true);
       const created = schedulers.find((scheduler) => scheduler.key.endsWith(config.id));
       expect(created).toBeDefined();
+      expect(Number((created as { every?: number | string }).every)).toBe(120 * 60_000);
 
+      // Interval change → scheduler updated in place.
+      await searchRepo.updateConfig(config.id, { intervalMinutes: 45 });
+      await service.syncAll();
+      const updated = (await queues.search.getJobSchedulers(0, 1_000, true)).find((scheduler) =>
+        scheduler.key.endsWith(config.id),
+      );
+      expect(Number((updated as { every?: number | string }).every)).toBe(45 * 60_000);
+
+      // Pause → removed.
       await searchRepo.updateConfig(config.id, { isActive: false });
       const second = await service.syncAll();
       expect(second.removed).toBeGreaterThanOrEqual(1);
-      const after = await queues.search.getJobSchedulers(0, 1_000, true);
-      expect(after.find((scheduler) => scheduler.key.endsWith(config.id))).toBeUndefined();
+      const afterPause = await queues.search.getJobSchedulers(0, 1_000, true);
+      expect(afterPause.find((scheduler) => scheduler.key.endsWith(config.id))).toBeUndefined();
+
+      // Reactivate → recreated.
+      await searchRepo.updateConfig(config.id, { isActive: true });
+      await service.syncAll();
+      const afterReactivate = (await queues.search.getJobSchedulers(0, 1_000, true)).find(
+        (scheduler) => scheduler.key.endsWith(config.id),
+      );
+      expect(afterReactivate).toBeDefined();
+      expect(Number((afterReactivate as { every?: number | string }).every)).toBe(45 * 60_000);
     } finally {
       await Promise.all(Object.values(queues).map((queue) => queue.close()));
       await connection.quit();
