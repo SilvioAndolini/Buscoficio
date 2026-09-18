@@ -20,7 +20,7 @@ import type {
   createStatsRepo,
 } from '@job-system/database';
 import type { Logger } from '@job-system/observability';
-import type { Env } from '@job-system/shared';
+import type { EmbeddingRuntime, Env } from '@job-system/shared';
 
 export interface ApiRepos {
   candidate: ReturnType<typeof createCandidateRepo>;
@@ -45,6 +45,8 @@ export interface ApiCtx {
   maintenanceQueue: Queue;
   /** Deterministic engine version used in BullMQ match job ids. */
   engineVersion: string;
+  /** Runtime embedding descriptor (same resolution as the worker). */
+  embeddingRuntime: EmbeddingRuntime;
   clock: Clock;
   repos: ApiRepos;
 }

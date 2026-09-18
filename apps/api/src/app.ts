@@ -23,7 +23,7 @@ import {
 } from '@job-system/database';
 import { ENGINE_VERSION } from '@job-system/matching';
 import type { Logger } from '@job-system/observability';
-import type { Env } from '@job-system/shared';
+import { resolveEmbeddingRuntime, type Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
 import { requireSession } from './auth.js';
 import type { ApiCtx } from './context.js';
@@ -72,6 +72,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     matchQueue: deps.matchQueue,
     maintenanceQueue: deps.maintenanceQueue,
     engineVersion: ENGINE_VERSION,
+    embeddingRuntime: resolveEmbeddingRuntime(deps.env),
     clock: deps.clock ?? systemClock,
     repos: {
       candidate: createCandidateRepo(deps.dbHandle.db),

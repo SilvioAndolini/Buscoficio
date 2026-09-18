@@ -59,6 +59,7 @@ function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): En
     TARGET_ENRICHMENT_MAX_PER_RUN: 25,
     EMBEDDING_DIMENSIONS: 1536,
     EMBEDDING_SPACE_VERSION: 'v1',
+    EMBEDDING_PROVIDER: 'mock',
   };
 }
 
@@ -517,6 +518,37 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     expect(spaces.length).toBeGreaterThanOrEqual(1);
     expect(spaces.filter((space) => space.status === 'active')).toHaveLength(1);
     expect(spaces[0]!.provider).toBe('mock');
+
+    // 10. Activating a space incompatible with the runtime is refused (409),
+    //     and the current active space stays untouched.
+    const incompatible = await createMatchingRepo(handle.db).ensureEmbeddingSpace({
+      key: 'mock-incompatible-1536-v9',
+      provider: 'mock',
+      model: 'mock-other-model',
+      dimensions: 1536,
+      distanceMetric: 'cosine',
+      version: 'v9',
+    });
+    expect(incompatible.status).toBe('inactive');
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/v1/embedding-spaces/${incompatible.id}/activate`,
+      headers: withCookie(),
+    });
+    expect(refused.statusCode).toBe(409);
+    const refusedBody = refused.json() as { code: string; details?: { mismatches?: string[] } };
+    expect(refusedBody.code).toBe('CONFLICT');
+    expect(refusedBody.details?.mismatches?.some((entry) => entry.includes('model'))).toBe(true);
+    const spacesAfter = await app.inject({
+      method: 'GET',
+      url: '/v1/embedding-spaces',
+      headers: withCookie(),
+    });
+    const activeAfter = (
+      spacesAfter.json() as { items: Array<{ status: string; model: string }> }
+    ).items.filter((space) => space.status === 'active');
+    expect(activeAfter).toHaveLength(1);
+    expect(activeAfter[0]!.model).toBe('mock-deterministic-v1');
   }, 120_000);
 
   it('is idempotent across two runs (no duplicate jobs)', async () => {

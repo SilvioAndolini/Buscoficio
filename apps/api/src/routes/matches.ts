@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ConflictError, NotFoundError } from '@job-system/core';
+import {
+  ConflictError,
+  NotFoundError,
+  embeddingRuntimeMatchesSpace,
+} from '@job-system/core';
 import { matchJobId } from '@job-system/shared';
 import { parse, type ApiCtx } from '../context.js';
 
@@ -117,11 +121,38 @@ export function registerMatchRoutes(app: FastifyInstance, ctx: ApiCtx): void {
 
   app.get('/v1/embedding-spaces', async () => {
     const items = await ctx.repos.matching.listEmbeddingSpaces();
-    return { items };
+    return {
+      items,
+      runtime: ctx.embeddingRuntime,
+    };
   });
 
+  /**
+   * Activation is rejected when the space does not match the runtime embedding
+   * provider (fail closed: the worker would refuse to use it anyway).
+   */
   app.post('/v1/embedding-spaces/:id/activate', async (request) => {
     const { id } = parse(IdParamsSchema, request.params);
+    const space = await ctx.repos.matching.getEmbeddingSpaceById(id);
+    if (!space) throw new NotFoundError(`Embedding space not found: ${id}`);
+    const compatibility = embeddingRuntimeMatchesSpace(space, ctx.embeddingRuntime);
+    if (!compatibility.compatible) {
+      throw new ConflictError(
+        'Embedding space is incompatible with the runtime embedding provider; activation refused',
+        {
+          context: {
+            embeddingSpaceId: space.id,
+            spaceProvider: space.provider,
+            spaceModel: space.model,
+            spaceDimensions: space.dimensions,
+            runtimeProvider: ctx.embeddingRuntime.provider,
+            runtimeModel: ctx.embeddingRuntime.model,
+            runtimeDimensions: ctx.embeddingRuntime.dimensions,
+            mismatches: compatibility.mismatches,
+          },
+        },
+      );
+    }
     const row = await ctx.repos.matching.activateEmbeddingSpace(id);
     await ctx.repos.audit.append({
       actor: 'user',
