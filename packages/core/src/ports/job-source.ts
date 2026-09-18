@@ -44,4 +44,9 @@ export interface JobSourceAdapter {
   /** Pure and deterministic: raw payload into the single normalized schema. */
   normalizeJob(raw: RawJob): NormalizedJob;
   detectApplicationTarget(raw: RawJob): DetectedApplicationTarget | null;
+  /**
+   * Optional: offer URL eligible for redirect-based target enrichment
+   * (only used when metadata detection found no target and rate limits allow).
+   */
+  resolveTargetUrl?(raw: RawJob): string | null;
 }

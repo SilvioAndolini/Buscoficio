@@ -6,6 +6,12 @@ export interface HttpRequestOptions {
   timeoutMs?: number;
   headers?: Record<string, string>;
   maxRedirects?: number;
+  /**
+   * Stops the redirect loop when the next URL satisfies the predicate.
+   * Used by target enrichment to detect an ATS from the Location header
+   * without issuing a request to the destination host.
+   */
+  stopWhen?: (nextUrl: string) => boolean;
 }
 
 export interface HttpResponse {
