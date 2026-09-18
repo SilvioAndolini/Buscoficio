@@ -1,4 +1,4 @@
-import { sha256Hex } from '@job-system/core';
+import { normalizeForDedup, sha256Hex } from '@job-system/core';
 import type {
   MatchCandidateExperience,
   MatchCandidateLanguage,
@@ -10,12 +10,28 @@ import type {
 /**
  * Canonical matching hashes (architecture doc 03 §6). Deterministic: no
  * timestamps, no accidental array order, no random ids. Only fields that
- * actually affect the v1 score are included (education is not scored in v1,
- * so it is intentionally excluded; adding it later means a new engine version).
+ * actually affect the score are included (education is not scored, so it is
+ * intentionally excluded; adding it later means a new engine version).
  */
 
 function canonical(value: unknown): string {
   return JSON.stringify(value);
+}
+
+/** Stable JSON: object keys sorted recursively so key order never matters. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortValue(value));
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortValue);
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, entry]) => [key, sortValue(entry)] as const);
+    return Object.fromEntries(entries);
+  }
+  return value;
 }
 
 function dayOf(date: Date | null): string {
@@ -29,8 +45,18 @@ export function computeCandidateProfileHash(input: {
   experiences: MatchCandidateExperience[];
 }): string {
   const profile = input.profile;
+  // Aliases participate in skillsMatch, so they MUST participate in the hash
+  // (normalized, deduplicated and sorted: alias order never changes it).
   const skills = [...input.skills]
-    .map((skill) => [skill.skillName.toLowerCase(), skill.level, skill.years ?? ''] as const)
+    .map(
+      (skill) =>
+        [
+          normalizeForDedup(skill.skillName),
+          [...new Set(skill.aliases.map((alias) => normalizeForDedup(alias)))].sort(),
+          skill.level,
+          skill.years ?? '',
+        ] as const,
+    )
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const languages = [...input.languages]
     .map((language) => [language.language.toLowerCase(), language.level] as const)
@@ -68,8 +94,9 @@ export function computeCandidateProfileHash(input: {
 
 /**
  * Resume set relevant to matching: the latest immutable version of every
- * resume. Creating a new ResumeVersion changes the hash (and therefore the
- * match identity); the previous version stays untouched.
+ * resume, including canonicalized highlights (they feed skill coverage and the
+ * embedding text). Creating a new ResumeVersion changes the hash; the previous
+ * version stays untouched.
  */
 export function computeResumeSetHash(resumes: MatchResume[]): string {
   const entries = [...resumes]
@@ -82,6 +109,7 @@ export function computeResumeSetHash(resumes: MatchResume[]): string {
       resume.latestVersion?.versionNumber ?? null,
       resume.latestVersion?.fileHash ?? null,
       resume.latestVersion?.kind ?? null,
+      resume.latestVersion === null ? null : canonicalJson(resume.latestVersion.highlights),
     ]);
   return sha256Hex(canonical(entries));
 }
@@ -93,9 +121,14 @@ export interface IdentityHashInput {
   candidateProfileHash: string;
   resumeSetHash: string;
   embeddingSpaceId: string | null;
+  /**
+   * Temporal anchor (YYYY-MM-DD) when open-ended experience exists; null when
+   * the score is time-independent (all experiences closed).
+   */
+  matchingAsOfDate: string | null;
 }
 
-/** `'none'` is the explicit canonical token when no semantic space applies. */
+/** `'none'` is the explicit canonical token when a component does not apply. */
 export function computeIdentityHash(input: IdentityHashInput): string {
   return sha256Hex(
     [
@@ -105,6 +138,7 @@ export function computeIdentityHash(input: IdentityHashInput): string {
       input.candidateProfileHash,
       input.resumeSetHash,
       input.embeddingSpaceId ?? 'none',
+      input.matchingAsOfDate ?? 'none',
     ].join('|'),
   );
 }

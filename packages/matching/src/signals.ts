@@ -1,4 +1,4 @@
-import { normalizeForDedup } from '@job-system/core';
+import { InternalError, normalizeForDedup } from '@job-system/core';
 import type { ExperienceLevel } from '@job-system/core';
 import type {
   MatchCandidateExperience,
@@ -100,23 +100,32 @@ const MIN_YEARS_BY_LEVEL: Record<ExperienceLevel, number> = {
 
 const MONTH_MS = 1000 * 60 * 60 * 24 * 30.4375;
 
+function asOfLabel(asOfDate: Date): string {
+  return asOfDate.toISOString().slice(0, 10);
+}
+
 /**
  * Deterministic years computation from experience ranges (doc 08 §5: only
- * strictly computable values). Open-ended roles use the latest date present in
- * the input set as the reference instant — never the wall clock — so the same
- * input always yields the same score.
+ * strictly computable values). Closed roles use their `endDate`; open-ended
+ * roles use the explicit `asOfDate` provided by the caller (originated in the
+ * injected Clock). The pure engine NEVER reads the wall clock, and the anchor
+ * participates in the match identity (engine v2).
+ *
+ * `asOfDate` is required (and validated) when at least one role is open-ended.
  */
-export function computeExperienceMonths(experiences: MatchCandidateExperience[]): number {
+export function computeExperienceMonths(
+  experiences: MatchCandidateExperience[],
+  asOfDate: Date | null,
+): number {
   if (experiences.length === 0) return 0;
-  const timestamps = experiences.flatMap((experience) => [
-    experience.startDate.getTime(),
-    (experience.endDate ?? experience.startDate).getTime(),
-  ]);
-  const reference = Math.max(...timestamps);
+  const hasOpenEnded = experiences.some((experience) => experience.endDate === null);
+  if (hasOpenEnded && asOfDate === null) {
+    throw new InternalError('computeExperienceMonths: asOfDate is required for open-ended experiences');
+  }
   const ranges = experiences
     .map((experience) => {
       const start = experience.startDate.getTime();
-      const end = (experience.endDate ?? new Date(reference)).getTime();
+      const end = (experience.endDate ?? asOfDate!).getTime();
       return end > start ? ([start, end] as const) : null;
     })
     .filter((range): range is readonly [number, number] => range !== null)
@@ -139,6 +148,7 @@ export function experienceMatch(
   job: MatchJob,
   experiences: MatchCandidateExperience[],
   skills: MatchCandidateSkill[],
+  asOfDate: Date | null,
 ): SignalResult {
   if (job.experienceLevel === null || job.experienceLevel === 'unknown') {
     return ABSENT('job does not specify an experience level');
@@ -146,10 +156,16 @@ export function experienceMatch(
   if (experiences.length === 0) {
     return ABSENT('candidate has no structured experience');
   }
-  const months = computeExperienceMonths(experiences);
+  const hasOpenEnded = experiences.some((experience) => experience.endDate === null);
+  const months = computeExperienceMonths(experiences, asOfDate);
   const years = round4(months / 12);
   const minimum = MIN_YEARS_BY_LEVEL[job.experienceLevel];
-  const details = [`candidate ~${years} years from experience ranges`, `level '${job.experienceLevel}' minimum ${minimum} years`];
+  const details = [
+    hasOpenEnded && asOfDate !== null
+      ? `candidate ~${years} years as of ${asOfLabel(asOfDate)} (open-ended experience)`
+      : `candidate ~${years} years from closed experience ranges`,
+    `level '${job.experienceLevel}' minimum ${minimum} years`,
+  ];
 
   const requiredSkills = new Set(job.requiredSkills.map((skill) => normalizeForDedup(skill)));
   for (const skill of skills) {

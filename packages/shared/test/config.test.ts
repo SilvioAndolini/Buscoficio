@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadEnv } from '../src/config.js';
+import {
+  ConfigError,
+  embeddingApiKey,
+  loadEnv,
+  resolveEmbeddingRuntime,
+} from '../src/config.js';
 
 const validEnv = {
   DATABASE_URL: 'postgres://job:job@localhost:5432/job_system',
@@ -56,5 +61,74 @@ describe('loadEnv', () => {
       loadEnv({ ...validEnv, NODE_ENV: 'development', AUTH_COOKIE_SECURE: 'false' })
         .AUTH_COOKIE_SECURE,
     ).toBe(false);
+  });
+});
+
+describe('embedding runtime configuration (independent from AI_PROVIDER)', () => {
+  it('defaults to the deterministic mock provider', () => {
+    const env = loadEnv(validEnv);
+    expect(env.EMBEDDING_PROVIDER).toBe('mock');
+    expect(resolveEmbeddingRuntime(env)).toEqual({
+      provider: 'mock',
+      model: 'mock-deterministic-v1',
+      dimensions: 1536,
+    });
+  });
+
+  it('supports AI_PROVIDER=anthropic with EMBEDDING_PROVIDER=mock', () => {
+    const env = loadEnv({ ...validEnv, AI_PROVIDER: 'anthropic', EMBEDDING_PROVIDER: 'mock' });
+    expect(resolveEmbeddingRuntime(env).provider).toBe('mock');
+  });
+
+  it('supports AI_PROVIDER=deepseek with EMBEDDING_PROVIDER=openai and an explicit model', () => {
+    const env = loadEnv({
+      ...validEnv,
+      AI_PROVIDER: 'deepseek',
+      EMBEDDING_PROVIDER: 'openai',
+      EMBEDDING_MODEL: 'text-embedding-3-small',
+    });
+    expect(resolveEmbeddingRuntime(env)).toEqual({
+      provider: 'openai',
+      model: 'text-embedding-3-small',
+      dimensions: 1536,
+    });
+  });
+
+  it('rejects anthropic/deepseek as embedding providers with clear ConfigErrors', () => {
+    expect(() => loadEnv({ ...validEnv, EMBEDDING_PROVIDER: 'anthropic' })).toThrow(
+      /does not provide an embeddings API/,
+    );
+    expect(() => loadEnv({ ...validEnv, EMBEDDING_PROVIDER: 'deepseek' })).toThrow(
+      /no documented embeddings endpoint/,
+    );
+  });
+
+  it('requires EMBEDDING_MODEL for openai', () => {
+    const env = loadEnv({ ...validEnv, EMBEDDING_PROVIDER: 'openai' });
+    expect(() => resolveEmbeddingRuntime(env)).toThrow(/EMBEDDING_MODEL is required/);
+  });
+
+  it('rejects an unsupported dimension (fixed vector column)', () => {
+    expect(() => loadEnv({ ...validEnv, EMBEDDING_DIMENSIONS: '768' })).toThrow(
+      /EMBEDDING_DIMENSIONS must be 1536/,
+    );
+  });
+
+  it('prefers EMBEDDING_API_KEY and falls back to OPENAI_API_KEY', () => {
+    const env = loadEnv({
+      ...validEnv,
+      EMBEDDING_PROVIDER: 'openai',
+      EMBEDDING_MODEL: 'text-embedding-3-small',
+      OPENAI_API_KEY: 'fallback-key',
+    });
+    expect(embeddingApiKey(env)).toBe('fallback-key');
+    const withDedicated = loadEnv({
+      ...validEnv,
+      EMBEDDING_PROVIDER: 'openai',
+      EMBEDDING_MODEL: 'text-embedding-3-small',
+      EMBEDDING_API_KEY: 'embedding-key',
+      OPENAI_API_KEY: 'fallback-key',
+    });
+    expect(embeddingApiKey(withDedicated)).toBe('embedding-key');
   });
 });

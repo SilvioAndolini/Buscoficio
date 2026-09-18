@@ -95,6 +95,12 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       );
       expect((embeddingColumn.rows as Array<{ type: string }>)[0]?.type).toBe('vector(1536)');
 
+      // Phase 3.1: temporal anchor is nullable (pre-existing history stays valid).
+      const asOfColumn = await db.execute(
+        sql`select is_nullable from information_schema.columns where table_name = 'job_match' and column_name = 'matching_as_of_date'`,
+      );
+      expect((asOfColumn.rows as Array<{ is_nullable: string }>)[0]?.is_nullable).toBe('YES');
+
       const constraints = await db.execute(
         sql`select conname, confdeltype from pg_constraint where conrelid = 'resume_version'::regclass and contype = 'f'`,
       );
@@ -202,6 +208,64 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
     }
 
     // Stage 3: apply 0006 (active without structured review → blocked).
+    const stage3Dir = buildPartialFolder(6);
+    await runMigrations(targetUrl, stage3Dir);
+    rmSync(stage3Dir, { recursive: true, force: true });
+
+    // Stage 4: apply 0007 (pgvector + job_match) to reach a Phase 3 database,
+    // then seed derived data (embeddings) and match history that the 0008
+    // sanitation must preserve/invalidate respectively.
+    const stage4Dir = buildPartialFolder(7);
+    await runMigrations(targetUrl, stage4Dir);
+    rmSync(stage4Dir, { recursive: true, force: true });
+
+    const stage4 = createDb(targetUrl, { max: 1 });
+    try {
+      const candidateId = uuidv7();
+      const jobId = uuidv7();
+      const resumeId = uuidv7();
+      const resumeVersionId = uuidv7();
+      const spaceId = uuidv7();
+      await stage4.db.execute(sql`
+        insert into candidate_profile (id, full_name, email)
+        values (${candidateId}, 'Ada Lovelace', 'ada@example.com')
+      `);
+      await stage4.db.execute(sql`
+        insert into job (id, company, company_norm, title, title_norm, description, dedup_key, content_hash)
+        values (${jobId}, 'Acme', 'acme', 'Developer', 'developer', 'Build things', ${'d'.repeat(64)}, ${'c'.repeat(64)})
+      `);
+      await stage4.db.execute(sql`
+        insert into resume (id, candidate_id, name, category)
+        values (${resumeId}, ${candidateId}, 'Engineering CV', 'software-engineering')
+      `);
+      await stage4.db.execute(sql`
+        insert into resume_version (id, resume_id, version_number, storage_key, file_hash)
+        values (${resumeVersionId}, ${resumeId}, 1, 'resumes/x/v1.txt', ${'a'.repeat(64)})
+      `);
+      await stage4.db.execute(sql`
+        insert into embedding_space (id, key, provider, model, dimensions, version, status)
+        values (${spaceId}, 'mock-deterministic-v1-1536-v1', 'mock', 'mock-deterministic-v1', 1536, 'v1', 'active')
+      `);
+      await stage4.db.execute(sql`
+        insert into job_match (id, job_id, candidate_id, overall_score, score_breakdown, engine_version,
+          weights_version, job_content_hash, candidate_profile_hash, resume_set_hash, identity_hash, is_current)
+        values (${uuidv7()}, ${jobId}, ${candidateId}, 0.7500, '{}'::jsonb, 'matching-v1', 'v1',
+          ${'c'.repeat(64)}, ${'b'.repeat(64)}, ${'e'.repeat(64)}, ${'f'.repeat(64)}, true)
+      `);
+      const legacyVector = sql.raw(`'[${Array(1536).fill('0.01').join(',')}]'::vector`);
+      await stage4.db.execute(sql`
+        insert into job_embedding (job_id, embedding_space_id, content_hash, embedding)
+        values (${jobId}, ${spaceId}, 'legacy-hash', ${legacyVector})
+      `);
+      await stage4.db.execute(sql`
+        insert into resume_embedding (resume_version_id, embedding_space_id, content_hash, embedding)
+        values (${resumeVersionId}, ${spaceId}, 'legacy-hash', ${legacyVector})
+      `);
+    } finally {
+      await stage4.pool.end();
+    }
+
+    // Stage 5: apply 0008 (temporal column + legacy embedding invalidation).
     await runMigrations(targetUrl);
   });
 
@@ -290,6 +354,56 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
         sql`select extname from pg_extension where extname = 'vector'`,
       );
       expect((extension.rows as Array<{ extname: string }>).length).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('0008 preserves JobMatch history, adds the temporal column and invalidates legacy embeddings', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      // Historical JobMatch (matching-v1) survives the sanitation untouched.
+      const matches = await db.execute(
+        sql`select id, engine_version, identity_hash, is_current, matching_as_of_date from job_match`,
+      );
+      const rows = matches.rows as Array<{
+        engine_version: string;
+        identity_hash: string;
+        is_current: boolean;
+        matching_as_of_date: string | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.engine_version).toBe('matching-v1');
+      expect(rows[0]!.identity_hash).toBe('f'.repeat(64));
+      expect(rows[0]!.is_current).toBe(true);
+      // Nullable for pre-existing history (no retroactive invention of dates).
+      expect(rows[0]!.matching_as_of_date).toBeNull();
+
+      // Derived embedding caches are invalidated (regenerable, not source data).
+      const embeddings = await db.execute(
+        sql`select
+              (select count(*) from job_embedding) as jobs,
+              (select count(*) from resume_embedding) as resumes`,
+      );
+      const counts = embeddings.rows[0] as { jobs: string; resumes: string };
+      expect(Number(counts.jobs)).toBe(0);
+      expect(Number(counts.resumes)).toBe(0);
+
+      // pgvector is preserved.
+      const extension = await db.execute(
+        sql`select extname from pg_extension where extname = 'vector'`,
+      );
+      expect((extension.rows as Array<{ extname: string }>).length).toBe(1);
+
+      // Source data is never touched by the sanitation.
+      const sources = await db.execute(
+        sql`select
+              (select count(*) from job) as jobs,
+              (select count(*) from resume_version) as versions`,
+      );
+      const sourceCounts = sources.rows[0] as { jobs: string; versions: string };
+      expect(Number(sourceCounts.jobs)).toBeGreaterThan(0);
+      expect(Number(sourceCounts.versions)).toBeGreaterThan(0);
     } finally {
       await pool.end();
     }

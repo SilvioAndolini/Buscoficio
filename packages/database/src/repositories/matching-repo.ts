@@ -35,6 +35,8 @@ export interface UpsertMatchData {
   embeddingSpaceId: string | null;
   identityHash: string;
   semanticModel: string | null;
+  /** Temporal anchor for open-ended experiences; null when time-independent. */
+  matchingAsOfDate: Date | null;
   computedAt: Date;
 }
 
@@ -54,6 +56,15 @@ export function createMatchingRepo(db: Db) {
 
     async listEmbeddingSpaces() {
       return db.select().from(t.embeddingSpace).orderBy(desc(t.embeddingSpace.createdAt));
+    },
+
+    async getEmbeddingSpaceById(id: string) {
+      const [row] = await db
+        .select()
+        .from(t.embeddingSpace)
+        .where(eq(t.embeddingSpace.id, id))
+        .limit(1);
+      return row ?? null;
     },
 
     /** Deterministic active-space resolution (partial unique guarantees ≤1). */
@@ -498,6 +509,7 @@ export function createMatchingRepo(db: Db) {
               identityHash: input.identityHash,
               isCurrent: true,
               semanticModel: input.semanticModel,
+              matchingAsOfDate: input.matchingAsOfDate,
               computedAt: input.computedAt,
             })
             .returning();

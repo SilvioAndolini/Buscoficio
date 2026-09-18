@@ -79,6 +79,7 @@ const input: MatchEngineInput = {
       similarity: 0.8,
     },
   ],
+  asOfDate: null,
 };
 
 describe('weights', () => {
@@ -210,5 +211,27 @@ describe('runMatchEngine', () => {
     const result = runMatchEngine({ ...input, resumeSemantics: [] });
     expect(result.breakdown.signals.semanticSimilarity.present).toBe(false);
     expect(result.overallScore).toBeGreaterThan(0);
+  });
+
+  it('uses the provided asOfDate for open-ended experience (never the wall clock)', () => {
+    const openEnded = {
+      ...input,
+      experiences: [
+        {
+          company: 'Acme',
+          title: 'Senior Developer',
+          startDate: new Date('2022-01-01T00:00:00Z'),
+          endDate: null,
+          skills: ['React'],
+        },
+      ],
+    };
+    const earlier = runMatchEngine({ ...openEnded, asOfDate: new Date('2024-01-01T00:00:00Z') });
+    const later = runMatchEngine({ ...openEnded, asOfDate: new Date('2026-09-18T00:00:00Z') });
+    expect(earlier.breakdown.signals.experienceMatch.present).toBe(true);
+    expect(Number(earlier.breakdown.signals.experienceMatch.score)).toBeLessThan(
+      Number(later.breakdown.signals.experienceMatch.score),
+    );
+    expect(later.breakdown.signals.experienceMatch.details?.join(' ')).toContain('as of 2026-09-18');
   });
 });

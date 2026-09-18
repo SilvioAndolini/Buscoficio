@@ -57,6 +57,13 @@
       "when": 1789755696991,
       "tag": "0007_matching_pgvector",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789766865980,
+      "tag": "0008_matching_sanitation",
+      "breakpoints": true
     }
   ]
 }

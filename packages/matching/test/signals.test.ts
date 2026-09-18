@@ -68,44 +68,85 @@ describe('skillsMatch', () => {
 });
 
 describe('experienceMatch', () => {
+  const AS_OF = new Date('2026-09-18T00:00:00Z');
+
   it('merges overlapping ranges instead of double counting', () => {
-    const months = computeExperienceMonths([
-      {
-        company: 'A',
-        title: 'Dev',
-        startDate: new Date('2019-01-01T00:00:00Z'),
-        endDate: new Date('2021-01-01T00:00:00Z'),
-        skills: [],
-      },
-      {
-        company: 'B',
-        title: 'Dev',
-        startDate: new Date('2020-06-01T00:00:00Z'),
-        endDate: new Date('2022-06-01T00:00:00Z'),
-        skills: [],
-      },
-    ]);
+    const months = computeExperienceMonths(
+      [
+        {
+          company: 'A',
+          title: 'Dev',
+          startDate: new Date('2019-01-01T00:00:00Z'),
+          endDate: new Date('2021-01-01T00:00:00Z'),
+          skills: [],
+        },
+        {
+          company: 'B',
+          title: 'Dev',
+          startDate: new Date('2020-06-01T00:00:00Z'),
+          endDate: new Date('2022-06-01T00:00:00Z'),
+          skills: [],
+        },
+      ],
+      null,
+    );
     expect(months / 12).toBeCloseTo(3.41, 1);
   });
 
-  it('uses the latest date present for open-ended roles (never the wall clock)', () => {
-    const months = computeExperienceMonths([
-      {
-        company: 'A',
-        title: 'Dev',
-        startDate: new Date('2022-01-01T00:00:00Z'),
-        endDate: null,
-        skills: [],
-      },
-      {
-        company: 'B',
-        title: 'Dev',
-        startDate: new Date('2021-01-01T00:00:00Z'),
-        endDate: new Date('2023-01-01T00:00:00Z'),
-        skills: [],
-      },
-    ]);
-    expect(months / 12).toBeCloseTo(2, 1);
+  it('counts a single open-ended role up to asOfDate (not 0 years)', () => {
+    const months = computeExperienceMonths(
+      [
+        {
+          company: 'A',
+          title: 'Dev',
+          startDate: new Date('2022-01-01T00:00:00Z'),
+          endDate: null,
+          skills: [],
+        },
+      ],
+      AS_OF,
+    );
+    expect(months / 12).toBeCloseTo(4.71, 1);
+  });
+
+  it('counts open-ended + closed periods together', () => {
+    const months = computeExperienceMonths(
+      [
+        {
+          company: 'A',
+          title: 'Dev',
+          startDate: new Date('2019-01-01T00:00:00Z'),
+          endDate: new Date('2022-01-01T00:00:00Z'),
+          skills: [],
+        },
+        {
+          company: 'B',
+          title: 'Dev',
+          startDate: new Date('2023-01-01T00:00:00Z'),
+          endDate: null,
+          skills: [],
+        },
+      ],
+      AS_OF,
+    );
+    expect(months / 12).toBeCloseTo(6.72, 1);
+  });
+
+  it('requires an explicit asOfDate when a role is open-ended', () => {
+    expect(() =>
+      computeExperienceMonths(
+        [
+          {
+            company: 'A',
+            title: 'Dev',
+            startDate: new Date('2022-01-01T00:00:00Z'),
+            endDate: null,
+            skills: [],
+          },
+        ],
+        null,
+      ),
+    ).toThrowError(/asOfDate is required/);
   });
 
   it('scores years against the senior minimum and is absent without level or experience', () => {
@@ -118,10 +159,30 @@ describe('experienceMatch', () => {
         skills: [],
       },
     ];
-    const result = experienceMatch(job, experiences, []);
+    const result = experienceMatch(job, experiences, [], null);
     expect(result.score).toBeCloseTo(0.8, 2);
-    expect(experienceMatch({ ...job, experienceLevel: null }, experiences, []).score).toBeNull();
-    expect(experienceMatch(job, [], []).score).toBeNull();
+    expect(experienceMatch({ ...job, experienceLevel: null }, experiences, [], null).score).toBeNull();
+    expect(experienceMatch(job, [], [], null).score).toBeNull();
+  });
+
+  it('explains the temporal anchor when a role is open-ended', () => {
+    const result = experienceMatch(
+      job,
+      [
+        {
+          company: 'A',
+          title: 'Dev',
+          startDate: new Date('2022-01-01T00:00:00Z'),
+          endDate: null,
+          skills: [],
+        },
+      ],
+      [],
+      AS_OF,
+    );
+    expect(result.details[0]).toContain('as of 2026-09-18');
+    expect(result.details[0]).toContain('open-ended experience');
+    expect(result.score).toBeGreaterThan(0);
   });
 
   it('only uses candidate_skill.years when present, never infers skill years from jobs', () => {
@@ -137,6 +198,7 @@ describe('experienceMatch', () => {
         },
       ],
       [{ skillName: 'React', aliases: [], level: 'advanced', years: 4 }],
+      null,
     );
     expect(result.details.some((detail) => detail.includes("candidate_skill 'React': 4 years"))).toBe(true);
   });

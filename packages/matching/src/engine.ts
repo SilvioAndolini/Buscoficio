@@ -131,7 +131,7 @@ export function runMatchEngine(
 
   const results: Record<(typeof SIGNAL_NAMES)[number], SignalResult> = {
     skillsMatch: skillsMatch(input.job, input.skills),
-    experienceMatch: experienceMatch(input.job, input.experiences, input.skills),
+    experienceMatch: experienceMatch(input.job, input.experiences, input.skills, input.asOfDate),
     locationMatch: locationMatch(input.job, input.profile),
     salaryMatch: salaryMatch(input.job, input.profile),
     languageMatch: languageMatch(input.job, input.languages),

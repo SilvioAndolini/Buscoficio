@@ -46,13 +46,24 @@ describe('createEmbeddingProvider', () => {
     } catch (error) {
       expect(isAppError(error)).toBe(true);
       expect((error as { code: string }).code).toBe('AI_ERROR');
+      expect((error as Error).message).toContain('Anthropic does not provide an embeddings API');
+    }
+  });
+
+  it('rejects deepseek instead of guessing an embeddings endpoint', () => {
+    try {
+      createEmbeddingProvider({ provider: 'deepseek', model: 'x', dimensions: 1536 });
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect(isAppError(error)).toBe(true);
+      expect((error as Error).message).toContain('no documented embeddings endpoint');
     }
   });
 
   it('requires credentials for real providers', () => {
     expect(() =>
       createEmbeddingProvider({ provider: 'openai', model: 'text-embedding-3-small', dimensions: 1536 }),
-    ).toThrowError(/API key/);
+    ).toThrowError(/requires a key/);
   });
 });
 

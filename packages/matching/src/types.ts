@@ -82,6 +82,12 @@ export interface MatchEngineInput {
   experiences: MatchCandidateExperience[];
   resumes: MatchResume[];
   resumeSemantics: MatchResumeSemantic[];
+  /**
+   * Explicit temporal anchor for open-ended experiences (from the injected
+   * Clock). Null when every experience is closed: the score is then
+   * time-independent and the identity does not include a date.
+   */
+  asOfDate: Date | null;
 }
 
 export type SignalName =

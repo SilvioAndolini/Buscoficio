@@ -95,6 +95,70 @@ describe('canonical matching hashes', () => {
     expect(changedPreference).not.toBe(base);
   });
 
+  it('skill aliases participate in candidateProfileHash (normalized, order-independent)', () => {
+    const base = computeCandidateProfileHash({ profile, skills, languages, experiences });
+    // Same aliases, different order and casing/whitespace: same hash.
+    const reorderedAliases = computeCandidateProfileHash({
+      profile,
+      skills: [
+        { ...skills[0]!, aliases: ['  TS ', 'typescript-lang'] },
+        { ...skills[1]!, aliases: ['typescript-lang', 'TS'] },
+      ].sort((a, b) => (a.skillName < b.skillName ? -1 : 1)),
+      languages,
+      experiences,
+    });
+    expect(reorderedAliases).not.toBe(base);
+
+    const aliasesA = computeCandidateProfileHash({
+      profile,
+      skills: [{ ...skills[0]!, aliases: ['TS', 'typescript-lang'] }, skills[1]!],
+      languages,
+      experiences,
+    });
+    const aliasesB = computeCandidateProfileHash({
+      profile,
+      skills: [{ ...skills[0]!, aliases: ['typescript-lang', 'TS'] }, skills[1]!],
+      languages,
+      experiences,
+    });
+    expect(aliasesA).toBe(aliasesB);
+    expect(aliasesA).not.toBe(base);
+  });
+
+  it('resumeSetHash covers canonicalized highlights (skill coverage + embedding text)', () => {
+    const base = computeResumeSetHash(resumes);
+    const withSkills = computeResumeSetHash([
+      {
+        ...resumes[0]!,
+        latestVersion: {
+          ...resumes[0]!.latestVersion!,
+          highlights: { skills: ['React', 'TypeScript'] },
+        },
+      },
+    ]);
+    expect(withSkills).not.toBe(base);
+    // Key order inside highlights never changes the hash.
+    const reordered = computeResumeSetHash([
+      {
+        ...resumes[0]!,
+        latestVersion: {
+          ...resumes[0]!.latestVersion!,
+          highlights: { summary: 'Frontend', skills: ['TypeScript', 'React'] },
+        },
+      },
+    ]);
+    const sameKeysOtherOrder = computeResumeSetHash([
+      {
+        ...resumes[0]!,
+        latestVersion: {
+          ...resumes[0]!.latestVersion!,
+          highlights: { skills: ['TypeScript', 'React'], summary: 'Frontend' },
+        },
+      },
+    ]);
+    expect(reordered).toBe(sameKeysOtherOrder);
+  });
+
   it('resumeSetHash is stable regardless of resume order and changes with versions', () => {
     const second: MatchResume = {
       id: '22222222-2222-7222-8222-222222222222',
@@ -118,23 +182,28 @@ describe('canonical matching hashes', () => {
     expect(computeResumeSetHash([newVersion, second])).not.toBe(base);
   });
 
-  it('identityHash covers engine, weights, hashes and embedding space', () => {
+  it('identityHash covers engine, weights, hashes, embedding space and as-of date', () => {
     const baseInput = {
-      engineVersion: 'matching-v1',
+      engineVersion: 'matching-v2',
       weightsVersion: 'v1',
       jobContentHash: 'a'.repeat(64),
       candidateProfileHash: 'b'.repeat(64),
       resumeSetHash: 'c'.repeat(64),
       embeddingSpaceId: '33333333-3333-7333-8333-333333333333',
+      matchingAsOfDate: null,
     };
     const base = computeIdentityHash(baseInput);
     expect(base).toHaveLength(64);
-    expect(computeIdentityHash({ ...baseInput, engineVersion: 'matching-v2' })).not.toBe(base);
+    expect(computeIdentityHash({ ...baseInput, engineVersion: 'matching-v3' })).not.toBe(base);
     expect(computeIdentityHash({ ...baseInput, weightsVersion: 'v2' })).not.toBe(base);
     expect(computeIdentityHash({ ...baseInput, jobContentHash: 'd'.repeat(64) })).not.toBe(base);
     expect(computeIdentityHash({ ...baseInput, candidateProfileHash: 'e'.repeat(64) })).not.toBe(base);
     expect(computeIdentityHash({ ...baseInput, resumeSetHash: 'f'.repeat(64) })).not.toBe(base);
     expect(computeIdentityHash({ ...baseInput, embeddingSpaceId: null })).not.toBe(base);
+    expect(computeIdentityHash({ ...baseInput, matchingAsOfDate: '2026-09-18' })).not.toBe(base);
+    expect(computeIdentityHash({ ...baseInput, matchingAsOfDate: '2026-09-19' })).not.toBe(
+      computeIdentityHash({ ...baseInput, matchingAsOfDate: '2026-09-18' }),
+    );
     expect(computeIdentityHash({ ...baseInput, embeddingSpaceId: null })).toBe(
       computeIdentityHash({ ...baseInput, embeddingSpaceId: null }),
     );

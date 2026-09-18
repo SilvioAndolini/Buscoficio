@@ -1,4 +1,15 @@
-export { EnvSchema, ConfigError, loadEnv, type Env } from './config.js';
+export {
+  ConfigError,
+  EMBEDDING_VECTOR_DIMENSIONS,
+  EnvSchema,
+  SUPPORTED_EMBEDDING_PROVIDERS,
+  embeddingApiKey,
+  loadEnv,
+  resolveEmbeddingRuntime,
+  type EmbeddingProviderName,
+  type EmbeddingRuntime,
+  type Env,
+} from './config.js';
 export { uuidv7 } from './ids.js';
 export {
   ingestSourceJobId,

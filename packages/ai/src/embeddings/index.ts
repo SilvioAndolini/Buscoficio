@@ -3,7 +3,8 @@ import { MockEmbeddingProvider } from './mock-provider.js';
 import { OpenAiEmbeddingProvider } from './openai-provider.js';
 
 export interface EmbeddingProviderFactoryConfig {
-  provider: 'openai' | 'anthropic' | 'deepseek' | 'mock';
+  /** Independent from AI_PROVIDER: embeddings are their own port. */
+  provider: string;
   model: string;
   dimensions: number;
   apiKey?: string | undefined;
@@ -11,15 +12,11 @@ export interface EmbeddingProviderFactoryConfig {
   fetchImpl?: typeof fetch | undefined;
 }
 
-const DEFAULT_BASE_URLS: Record<string, string> = {
-  openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-};
-
 /**
- * Composition-root factory: `AI_PROVIDER=mock` (default) yields the
- * deterministic offline provider; real providers require explicit credentials
- * and are never exercised by CI.
+ * Composition-root factory. Only providers with a real, documented embeddings
+ * endpoint are implemented (`mock` for CI/dev, `openai` compatible). A chat
+ * provider does NOT imply an embeddings provider: unsupported values fail with
+ * a typed error instead of calling a guessed endpoint.
  */
 export function createEmbeddingProvider(
   config: EmbeddingProviderFactoryConfig,
@@ -29,20 +26,30 @@ export function createEmbeddingProvider(
   }
   if (config.provider === 'anthropic') {
     throw new AiError(
-      'Anthropic does not provide an embeddings API; configure AI_PROVIDER=openai|deepseek|mock',
+      'EMBEDDING_PROVIDER=anthropic: Anthropic does not provide an embeddings API; use openai|mock (AI_PROVIDER is independent)',
+    );
+  }
+  if (config.provider === 'deepseek') {
+    throw new AiError(
+      'EMBEDDING_PROVIDER=deepseek: no documented embeddings endpoint is implemented; use openai|mock',
+    );
+  }
+  if (config.provider !== 'openai') {
+    throw new AiError(
+      `Unsupported embedding provider '${config.provider}'; supported: mock|openai`,
     );
   }
   if (config.apiKey === undefined || config.apiKey.length === 0) {
     throw new AiError(
-      `AI_PROVIDER=${config.provider} requires an API key (OPENAI_API_KEY) via configuration/SecretProvider`,
+      'EMBEDDING_PROVIDER=openai requires a key (EMBEDDING_API_KEY or OPENAI_API_KEY) via configuration/SecretProvider',
     );
   }
   return new OpenAiEmbeddingProvider({
-    provider: config.provider,
+    provider: 'openai',
     apiKey: config.apiKey,
     model: config.model,
     dimensions: config.dimensions,
-    baseUrl: config.baseUrl ?? DEFAULT_BASE_URLS[config.provider] ?? DEFAULT_BASE_URLS['openai']!,
+    baseUrl: config.baseUrl ?? 'https://api.openai.com/v1',
     ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
   });
 }

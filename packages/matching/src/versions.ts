@@ -6,7 +6,13 @@
  * `weightsVersion`. Those strings are part of the JobMatch identity hash, so a
  * bump produces a new match row while the previous one stays as history.
  */
-export const ENGINE_VERSION = 'matching-v1';
+/**
+ * v2 (Phase 3.1 sanitation): open-ended experiences are evaluated against an
+ * explicit `matchingAsOfDate` (Clock-provided) instead of the latest date found
+ * inside the experience set, and the anchor participates in the identity hash.
+ * v1 could report ~0 years for a role that started years ago.
+ */
+export const ENGINE_VERSION = 'matching-v2';
 
 export const WEIGHTS_VERSION = 'v1';
 

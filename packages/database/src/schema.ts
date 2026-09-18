@@ -16,13 +16,14 @@ import {
   vector,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { EMBEDDING_VECTOR_DIMENSIONS } from '@job-system/shared';
 
 /**
  * Fixed pgvector dimension (ADR-018): one vector(N) column per space type.
- * Changing the dimension requires a parallel-table migration + re-embedding,
- * which is out of Phase 3 scope (validated at configuration load time).
+ * The value comes from the shared config constant so the column and the
+ * runtime configuration can never drift apart.
  */
-export const VECTOR_DIMENSIONS = 1536;
+export const VECTOR_DIMENSIONS = EMBEDDING_VECTOR_DIMENSIONS;
 
 /**
  * Phase 1 schema — subset of the approved data model (docs/arquitectura/04).
@@ -564,6 +565,12 @@ export const jobMatch = pgTable(
     identityHash: text('identity_hash').notNull(),
     isCurrent: boolean('is_current').notNull().default(false),
     semanticModel: text('semantic_model'),
+    /**
+     * Temporal anchor used to evaluate open-ended experiences (Phase 3.1).
+     * Null when every experience is closed (the score does not depend on
+     * time) or for matches computed before this column existed.
+     */
+    matchingAsOfDate: date('matching_as_of_date', { mode: 'date' }),
     computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
