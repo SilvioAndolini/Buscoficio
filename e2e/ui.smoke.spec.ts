@@ -49,6 +49,12 @@ test('runs a mock search from the UI and shows canonical jobs', async ({ page })
   await expect(page.getByText('Búsqueda completada')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByRole('cell', { name: 'Senior React Developer' })).toBeVisible();
 
+  // Phase 2: per-source breakdown and dedup review sections are visible.
+  await expect(page.getByRole('heading', { name: 'Fuentes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Revisión de duplicados (zona gris)' })).toBeVisible();
+  await expect(page.getByText('Sin revisiones pendientes')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'mock' }).first()).toBeVisible();
+
   await page
     .getByRole('row', { name: /Senior React Developer/ })
     .getByRole('button', { name: 'Ver' })
