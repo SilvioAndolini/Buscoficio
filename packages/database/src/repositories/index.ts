@@ -9,3 +9,12 @@ export {
   type SourceRunResult,
 } from './search-repo.js';
 export { createAuditRepo, type AuditEntry } from './audit-repo.js';
+export {
+  createMatchingRepo,
+  type EnsureEmbeddingSpaceData,
+  type MatchWithJob,
+  type MatchingRepo,
+  type UpsertEmbeddingData,
+  type UpsertMatchData,
+} from './matching-repo.js';
+export { createAiUsageRepo, type AiUsageEntry, type AiUsageRepo } from './ai-usage-repo.js';

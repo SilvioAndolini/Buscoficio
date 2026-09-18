@@ -56,6 +56,9 @@ importers:
       '@job-system/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@job-system/matching':
+        specifier: workspace:*
+        version: link:../../packages/matching
       '@job-system/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -124,6 +127,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@job-system/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@job-system/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -133,6 +139,9 @@ importers:
       '@job-system/job-sources':
         specifier: workspace:*
         version: link:../../packages/job-sources
+      '@job-system/matching':
+        specifier: workspace:*
+        version: link:../../packages/matching
       '@job-system/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -173,6 +182,9 @@ importers:
       '@job-system/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/application-engine:
     dependencies:
@@ -252,6 +264,9 @@ importers:
       '@job-system/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/observability:
     dependencies:

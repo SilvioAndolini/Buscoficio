@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { desc } from 'drizzle-orm';
 import {
   boolean,
   date,
@@ -7,12 +8,21 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
   uuid,
+  vector,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+
+/**
+ * Fixed pgvector dimension (ADR-018): one vector(N) column per space type.
+ * Changing the dimension requires a parallel-table migration + re-embedding,
+ * which is out of Phase 3 scope (validated at configuration load time).
+ */
+export const VECTOR_DIMENSIONS = 1536;
 
 /**
  * Phase 1 schema — subset of the approved data model (docs/arquitectura/04).
@@ -436,6 +446,11 @@ export const embeddingSpace = pgTable(
       table.dimensions,
       table.version,
     ),
+    // Phase 3: at most one ACTIVE space (deterministic resolution rule).
+    // Inactive/legacy spaces coexist untouched (ADR-018).
+    uniqueIndex('embedding_space_active_uq')
+      .on(table.status)
+      .where(sql`${table.status} = 'active'`),
   ],
 );
 
@@ -517,6 +532,114 @@ export const auditLog = pgTable(
 );
 
 /* ------------------------------------------------------------------ */
+/* Matching (Phase 3)                                                  */
+/* ------------------------------------------------------------------ */
+
+export const jobMatch = pgTable(
+  'job_match',
+  {
+    id: uuid('id').primaryKey(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => job.id, { onDelete: 'cascade' }),
+    candidateId: uuid('candidate_id')
+      .notNull()
+      .references(() => candidateProfile.id, { onDelete: 'cascade' }),
+    overallScore: numeric('overall_score', { precision: 5, scale: 4 }).notNull(),
+    scoreBreakdown: jsonb('score_breakdown').notNull(),
+    reasons: text('reasons').array().notNull().default(emptyTextArray),
+    missingRequirements: text('missing_requirements').array().notNull().default(emptyTextArray),
+    matchingSkills: text('matching_skills').array().notNull().default(emptyTextArray),
+    recommendedResumeId: uuid('recommended_resume_id').references(() => resume.id, {
+      onDelete: 'set null',
+    }),
+    engineVersion: text('engine_version').notNull(),
+    weightsVersion: text('weights_version').notNull(),
+    jobContentHash: text('job_content_hash').notNull(),
+    candidateProfileHash: text('candidate_profile_hash').notNull(),
+    resumeSetHash: text('resume_set_hash').notNull(),
+    embeddingSpaceId: uuid('embedding_space_id').references(() => embeddingSpace.id, {
+      onDelete: 'set null',
+    }),
+    identityHash: text('identity_hash').notNull(),
+    isCurrent: boolean('is_current').notNull().default(false),
+    semanticModel: text('semantic_model'),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('job_match_identity_uq').on(table.jobId, table.candidateId, table.identityHash),
+    // At most one current match per (job, candidate): DB-enforced, not app-only.
+    uniqueIndex('job_match_current_uq')
+      .on(table.jobId, table.candidateId)
+      .where(sql`${table.isCurrent} = true`),
+    index('job_match_ranking_idx')
+      .on(table.candidateId, desc(table.overallScore))
+      .where(sql`${table.isCurrent} = true`),
+    index('job_match_computed_idx').on(desc(table.computedAt)),
+  ],
+);
+
+export const jobEmbedding = pgTable(
+  'job_embedding',
+  {
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => job.id, { onDelete: 'cascade' }),
+    embeddingSpaceId: uuid('embedding_space_id')
+      .notNull()
+      .references(() => embeddingSpace.id, { onDelete: 'cascade' }),
+    contentHash: text('content_hash').notNull(),
+    embedding: vector('embedding', { dimensions: VECTOR_DIMENSIONS }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.jobId, table.embeddingSpaceId], name: 'job_embedding_pk' }),
+    index('job_embedding_hnsw_idx').using('hnsw', sql`${table.embedding} vector_cosine_ops`),
+  ],
+);
+
+export const resumeEmbedding = pgTable(
+  'resume_embedding',
+  {
+    resumeVersionId: uuid('resume_version_id')
+      .notNull()
+      .references(() => resumeVersion.id, { onDelete: 'cascade' }),
+    embeddingSpaceId: uuid('embedding_space_id')
+      .notNull()
+      .references(() => embeddingSpace.id, { onDelete: 'cascade' }),
+    contentHash: text('content_hash').notNull(),
+    embedding: vector('embedding', { dimensions: VECTOR_DIMENSIONS }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.resumeVersionId, table.embeddingSpaceId], name: 'resume_embedding_pk' }),
+    index('resume_embedding_hnsw_idx').using('hnsw', sql`${table.embedding} vector_cosine_ops`),
+  ],
+);
+
+/** AI usage ledger (doc 04 §2.8); Phase 3 records `operation='embed'`. */
+export const aiUsage = pgTable(
+  'ai_usage',
+  {
+    id: uuid('id').primaryKey(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    operation: text('operation').notNull(),
+    tokensIn: integer('tokens_in'),
+    tokensOut: integer('tokens_out'),
+    costEstimateUsd: numeric('cost_estimate_usd', { precision: 12, scale: 6 }),
+    confidence: numeric('confidence', { precision: 5, scale: 4 }),
+    latencyMs: integer('latency_ms').notNull(),
+    cached: boolean('cached').notNull().default(false),
+    applicationId: uuid('application_id'),
+    jobId: uuid('job_id').references(() => job.id, { onDelete: 'set null' }),
+    correlationId: text('correlation_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('ai_usage_operation_created_idx').on(table.operation, table.createdAt)],
+);
+
+/* ------------------------------------------------------------------ */
 /* Row types                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -536,4 +659,9 @@ export type DedupReviewRow = typeof dedupReview.$inferSelect;
 export type SearchConfigRow = typeof searchConfig.$inferSelect;
 export type SearchRunRow = typeof searchRun.$inferSelect;
 export type SearchSourceRunRow = typeof searchSourceRun.$inferSelect;
+export type JobMatchRow = typeof jobMatch.$inferSelect;
+export type JobEmbeddingRow = typeof jobEmbedding.$inferSelect;
+export type ResumeEmbeddingRow = typeof resumeEmbedding.$inferSelect;
+export type EmbeddingSpaceRow = typeof embeddingSpace.$inferSelect;
+export type AiUsageRow = typeof aiUsage.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;

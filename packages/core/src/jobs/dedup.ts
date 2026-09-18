@@ -96,13 +96,20 @@ export interface JobContentHashInput {
   currency?: string | null;
   experienceLevel?: string | null;
   languageRequirements: string[];
+  /** Skills affect matching (Phase 3) and therefore the content identity. */
+  requiredSkills?: string[];
+  preferredSkills?: string[];
 }
 
 /**
  * Hash of the canonical fields that affect matching (JobMatch identity, ADR-014).
  * Recomputation is idempotent while the content is unchanged.
+ * Phase 3 extends the field set with required/preferred skills; callers that
+ * predate skills pass empty arrays, which hash the same as an omitted list.
  */
 export function computeJobContentHash(input: JobContentHashInput): string {
+  const skills = (values: string[] | undefined): string =>
+    [...(values ?? [])].map(normalizeForDedup).sort().join(',');
   return sha256Hex(
     [
       normalizeForDedup(input.company),
@@ -116,6 +123,8 @@ export function computeJobContentHash(input: JobContentHashInput): string {
       input.currency ?? '',
       input.experienceLevel ?? '',
       [...input.languageRequirements].map(normalizeForDedup).sort().join(','),
+      skills(input.requiredSkills),
+      skills(input.preferredSkills),
     ].join('|'),
   );
 }

@@ -3,6 +3,7 @@ export * from './jobs/dedup.js';
 export * from './jobs/filters.js';
 export * from './jobs/targets.js';
 export * from './ports/clock.js';
+export * from './ports/embedding.js';
 export * from './ports/http.js';
 export * from './ports/job-source.js';
 export * from './ports/storage.js';

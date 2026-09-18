@@ -8,12 +8,13 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "lint": "eslint --config ../../eslint.config.mjs src",
+    "lint": "eslint --config ../../eslint.config.mjs src test",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@job-system/core": "workspace:*",
-    "@job-system/shared": "workspace:*"
+    "@job-system/shared": "workspace:*",
+    "zod": "^3.24.1"
   }
 }

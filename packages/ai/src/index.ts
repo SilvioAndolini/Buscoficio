@@ -1,7 +1,8 @@
 /**
- * Placeholder package (ai:phase-3).
- * Exists in Phase 1 to fix the approved repository layout and dependency
- * boundaries; functionality lands in its roadmap phase (docs/roadmap).
+ * `packages/ai` implements the core AI ports (TextGeneration, Embeddings,
+ * DecisionProvider). Phase 3 lands the EmbeddingProvider; text generation and
+ * Jev/DecisionProvider belong to their roadmap phases.
  */
-export const PACKAGE_PHASE = "ai:phase-3" as const;
+export * from './embeddings/index.js';
 
+export const PACKAGE_PHASE = 'ai:phase-3' as const;

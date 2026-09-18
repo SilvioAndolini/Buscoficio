@@ -46,6 +46,7 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       );
       const names = (tables.rows as Array<{ tablename: string }>).map((row) => row.tablename);
       for (const expected of [
+        'ai_usage',
         'application_target',
         'audit_log',
         'candidate_profile',
@@ -53,9 +54,12 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
         'decision_log',
         'embedding_space',
         'job',
+        'job_embedding',
         'job_listing',
+        'job_match',
         'job_source',
         'resume',
+        'resume_embedding',
         'resume_version',
         'search_config',
         'search_run',
@@ -72,6 +76,24 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       expect(indexNames).toContain('job_dedup_key_uq');
       expect(indexNames).toContain('resume_version_resume_version_uq');
       expect(indexNames).not.toContain('resume_candidate_category_language_uq');
+
+      // Phase 3: identity/current constraints, ranking index and HNSW vectors.
+      expect(indexNames).toContain('job_match_identity_uq');
+      expect(indexNames).toContain('job_match_current_uq');
+      expect(indexNames).toContain('job_match_ranking_idx');
+      expect(indexNames).toContain('job_embedding_hnsw_idx');
+      expect(indexNames).toContain('resume_embedding_hnsw_idx');
+      expect(indexNames).toContain('embedding_space_active_uq');
+
+      const extension = await db.execute(
+        sql`select extname from pg_extension where extname = 'vector'`,
+      );
+      expect((extension.rows as Array<{ extname: string }>).length).toBe(1);
+
+      const embeddingColumn = await db.execute(
+        sql`select format_type(atttypid, atttypmod) as type from pg_attribute where attrelid = 'job_embedding'::regclass and attname = 'embedding'`,
+      );
+      expect((embeddingColumn.rows as Array<{ type: string }>)[0]?.type).toBe('vector(1536)');
 
       const constraints = await db.execute(
         sql`select conname, confdeltype from pg_constraint where conrelid = 'resume_version'::regclass and contype = 'f'`,
@@ -247,6 +269,27 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       // Previous stages remain consistent.
       expect(byKey.get('legacy-unreviewed')!.status).toBe('blocked');
       expect(byKey.get('legacy-reviewed')!.status).toBe('active');
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('0007 upgrades the Phase 2.3 database with matching tables and real pgvector', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      const tables = await db.execute(
+        sql`select tablename from pg_tables where schemaname = 'public' order by tablename`,
+      );
+      const names = (tables.rows as Array<{ tablename: string }>).map((row) => row.tablename);
+      expect(names).toContain('job_match');
+      expect(names).toContain('job_embedding');
+      expect(names).toContain('resume_embedding');
+      expect(names).toContain('ai_usage');
+
+      const extension = await db.execute(
+        sql`select extname from pg_extension where extname = 'vector'`,
+      );
+      expect((extension.rows as Array<{ extname: string }>).length).toBe(1);
     } finally {
       await pool.end();
     }

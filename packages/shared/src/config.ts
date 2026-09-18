@@ -39,6 +39,14 @@ export const EnvSchema = z.object({
   DECISION_PROVIDER: z.enum(['jev', 'llm-adapter', 'mock']).default('mock'),
   AI_MONTHLY_BUDGET_USD: z.coerce.number().nonnegative().default(20),
 
+  /** Phase 3 embeddings (defaults keep CI/dev fully offline with the mock). */
+  EMBEDDING_MODEL: z.string().min(1).max(120).optional(),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(1536),
+  EMBEDDING_SPACE_VERSION: z.string().min(1).max(40).default('v1'),
+  EMBEDDING_BASE_URL: z.string().url().optional(),
+  /** Only required for real providers; never set in CI. */
+  OPENAI_API_KEY: z.string().min(1).optional(),
+
   /** Phase 2 discovery tuning (single source of truth for thresholds). */
   DEDUP_L3_HIGH_THRESHOLD: z.coerce.number().min(0).max(1).default(0.92),
   DEDUP_L3_MEDIUM_THRESHOLD: z.coerce.number().min(0).max(1).default(0.75),

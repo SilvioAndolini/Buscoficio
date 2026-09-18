@@ -1,7 +1,11 @@
-/**
- * Placeholder package (matching:phase-3).
- * Exists in Phase 1 to fix the approved repository layout and dependency
- * boundaries; functionality lands in its roadmap phase (docs/roadmap).
- */
-export const PACKAGE_PHASE = "matching:phase-3" as const;
-
+export * from './category.js';
+export * from './context.js';
+export * from './engine.js';
+export * from './hashes.js';
+export * from './schemas.js';
+export * from './signals.js';
+export * from './similarity.js';
+export * from './text.js';
+export * from './types.js';
+export * from './versions.js';
+export * from './weights.js';

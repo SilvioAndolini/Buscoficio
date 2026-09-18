@@ -33,3 +33,11 @@ export function ingestSourceJobId(searchRunId: string, sourceKey: string): strin
 export function schedulerIdForSearchConfig(searchConfigId: string): string {
   return `search-config-${safeQueueIdPart(searchConfigId)}`;
 }
+
+/**
+ * Matching job id (doc 06 §3): `match-<jobId>-<engineVersion>`.
+ * Functionally idempotent on top of the job_match identity constraint.
+ */
+export function matchJobId(jobId: string, engineVersion: string): string {
+  return `match-${safeQueueIdPart(jobId)}-${safeQueueIdPart(engineVersion)}`;
+}
