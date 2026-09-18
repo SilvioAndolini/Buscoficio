@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sha256Hex } from '@job-system/core';
@@ -9,9 +11,15 @@ import { createLogger } from '@job-system/observability';
 import type { DbHandle } from '@job-system/database';
 import { createTestDb, truncateAll } from '@job-system/database/testing';
 import { LocalStorageAdapter } from '@job-system/storage';
+import {
+  createArbeitnowAdapter,
+  createMockJobSource,
+  createRemoteOkAdapter,
+  createRemotiveAdapter,
+} from '@job-system/job-sources';
 import { startWorkerRuntime, type WorkerRuntime } from '@job-system/worker';
 import { buildApp } from '../src/app.js';
-import { createSearchQueue } from '../src/search-queue.js';
+import { createMaintenanceQueue, createSearchQueue } from '../src/search-queue.js';
 import { createRedisConnection } from '../src/redis.js';
 
 const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? '';
@@ -41,7 +49,57 @@ function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): En
     AI_PROVIDER: 'mock',
     DECISION_PROVIDER: 'mock',
     AI_MONTHLY_BUDGET_USD: 0,
+    DEDUP_L3_HIGH_THRESHOLD: 0.92,
+    DEDUP_L3_MEDIUM_THRESHOLD: 0.75,
+    WATCHDOG_TIMEOUT_MS: 900_000,
+    // Scheduled runs are exercised by worker integration tests; the E2E keeps
+    // manual runs for determinism (no background runs mid-test).
+    SCHEDULER_ENABLED: false,
   };
+}
+
+/** Local HTTP server serving recorded fixtures to the real adapters (no internet). */
+const CRAFTED_REMOTEOK_JOB = {
+  id: 900001,
+  slug: 'acme-remote-platform-engineer',
+  company: 'Acme Remote',
+  position: 'Platform Engineer (Fixture)',
+  description: '<p>Operate platform systems.</p>',
+  location: 'Remote',
+  salary_min: 0,
+  salary_max: 0,
+  url: 'https://remoteok.com/remote-jobs/900001',
+  apply_url: 'https://boards.greenhouse.io/acme/jobs/42',
+  date: '2026-01-10T00:00:00Z',
+  tags: ['platform'],
+};
+
+function startFixtureServer(): Promise<{ server: Server; baseUrl: string }> {
+  const fixturesDir = resolve(process.cwd(), '../../packages/job-sources/test/fixtures');
+  const remotive = JSON.parse(readFileSync(join(fixturesDir, 'remotive/search-page.json'), 'utf8'));
+  const arbeitnow = JSON.parse(readFileSync(join(fixturesDir, 'arbeitnow/search-page.json'), 'utf8'));
+  const remoteokRaw = JSON.parse(readFileSync(join(fixturesDir, 'remoteok/search-page.json'), 'utf8')) as unknown[];
+  const remoteok = [...remoteokRaw, CRAFTED_REMOTEOK_JOB];
+
+  const server = createServer((request, response) => {
+    const url = request.url ?? '';
+    response.setHeader('content-type', 'application/json');
+    if (url.startsWith('/api/remote-jobs')) response.end(JSON.stringify(remotive));
+    else if (url.startsWith('/api/job-board-api')) response.end(JSON.stringify(arbeitnow));
+    else if (url.startsWith('/api')) response.end(JSON.stringify(remoteok));
+    else {
+      response.statusCode = 404;
+      response.end('{}');
+    }
+  });
+
+  return new Promise((resolvePromise) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      resolvePromise({ server, baseUrl: `http://127.0.0.1:${port}` });
+    });
+  });
 }
 
 function multipart(
@@ -66,8 +124,10 @@ let handle: DbHandle;
 let app: FastifyInstance;
 let runtime: WorkerRuntime;
 let queue: ReturnType<typeof createSearchQueue>;
+let maintenanceQueue: ReturnType<typeof createMaintenanceQueue>;
 let redis: ReturnType<typeof createRedisConnection>;
 let storageDir: string;
+let fixtureServer: Server;
 let cookie = '';
 
 function withCookie(headers: Record<string, string> = {}): Record<string, string> {
@@ -90,11 +150,20 @@ beforeAll(async () => {
   storageDir = await mkdtemp(join(tmpdir(), 'job-system-e2e-storage-'));
   handle = await createTestDb();
   const env = buildEnv(TEST_DATABASE_URL, TEST_REDIS_URL, storageDir);
+  const fixtures = await startFixtureServer();
+  fixtureServer = fixtures.server;
   runtime = await startWorkerRuntime(env, createLogger({ level: 'error' }), {
     queuePrefix: QUEUE_PREFIX,
+    adapters: [
+      createMockJobSource(),
+      createRemotiveAdapter({ baseUrl: fixtures.baseUrl }),
+      createArbeitnowAdapter({ baseUrl: fixtures.baseUrl }),
+      createRemoteOkAdapter({ baseUrl: fixtures.baseUrl }),
+    ],
   });
   redis = createRedisConnection(TEST_REDIS_URL);
   queue = createSearchQueue(redis, QUEUE_PREFIX);
+  maintenanceQueue = createMaintenanceQueue(redis, QUEUE_PREFIX);
   const storage = new LocalStorageAdapter(storageDir);
   app = await buildApp({
     env,
@@ -103,6 +172,7 @@ beforeAll(async () => {
     redis,
     storage,
     searchQueue: queue,
+    maintenanceQueue,
   });
   await app.ready();
 });
@@ -110,10 +180,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close();
   await queue.close();
+  await maintenanceQueue.close();
   await redis.quit();
   await runtime.close();
   await handle.pool.end();
   await rm(storageDir, { recursive: true, force: true });
+  await new Promise((resolvePromise) => fixtureServer.close(resolvePromise));
 });
 
 beforeEach(async () => {
@@ -361,5 +433,97 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     const latest = runs.items.find((run) => seenRunIds.has(run.id) && run.jobsNew === 0);
     expect(latest).toBeDefined();
     expect(latest!.jobsDuplicated).toBe(9);
+  });
+
+  it('discovers via a real adapter (local fixture server) and resolves the ATS target', async () => {
+    await login();
+    await app.inject({
+      method: 'PUT',
+      url: '/v1/profile',
+      headers: withCookie(),
+      payload: { fullName: 'Ada Lovelace', email: 'ada@example.com' },
+    });
+
+    const configResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/search-configs',
+      headers: withCookie(),
+      payload: { name: 'Fixture discovery', sources: ['remoteok'], keywords: [], intervalMinutes: 60 },
+    });
+    expect(configResponse.statusCode).toBe(201);
+    const configId = (configResponse.json() as { id: string }).id;
+
+    // Scheduler sync is requested via the maintenance queue (SCHEDULER_ENABLED
+    // is false in this suite, so the handler logs the skip; the sync job itself
+    // must have been consumed without leaving the config without a scheduler).
+    const syncJobs = await maintenanceQueue.getJobs(['waiting', 'active', 'completed'], 0, 50);
+    expect(syncJobs.some((job) => job.name === 'scheduler.sync')).toBe(true);
+
+    const runResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/search-configs/${configId}/run`,
+      headers: withCookie(),
+    });
+    expect(runResponse.statusCode).toBe(202);
+
+    const deadline = Date.now() + 30_000;
+    let run: { id: string; status: string; jobsDiscovered: number } | null = null;
+    while (Date.now() < deadline) {
+      const runsResponse = await app.inject({
+        method: 'GET',
+        url: '/v1/search-runs?limit=1',
+        headers: withCookie(),
+      });
+      const runs = runsResponse.json() as {
+        items: Array<{ id: string; status: string; jobsDiscovered: number }>;
+      };
+      const candidate = runs.items[0] ?? null;
+      if (candidate && candidate.status !== 'running') {
+        run = candidate;
+        break;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+    expect(run).not.toBeNull();
+    expect(run!.status).toBe('completed');
+    expect(run!.jobsDiscovered).toBeGreaterThan(0);
+
+    // Discovery source and submission target stay distinct (ADR-013).
+    const runDetail = await app.inject({
+      method: 'GET',
+      url: `/v1/search-runs/${run!.id}`,
+      headers: withCookie(),
+    });
+    const sources = (runDetail.json() as { sources: Array<{ sourceKey: string; status: string }> }).sources;
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.sourceKey).toBe('remoteok');
+    expect(sources[0]!.status).toBe('completed');
+
+    const jobsResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/jobs?limit=100&status=active',
+      headers: withCookie(),
+    });
+    const jobs = jobsResponse.json() as { items: Array<{ id: string; title: string }> };
+    const fixtureJob = jobs.items.find((job) => job.title === 'Platform Engineer (Fixture)');
+    expect(fixtureJob).toBeDefined();
+
+    const detailResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/jobs/${fixtureJob!.id}`,
+      headers: withCookie(),
+    });
+    const detail = detailResponse.json() as {
+      applicationTarget: { key: string; platform: string } | null;
+      listings: Array<{ sourceKey: string }>;
+    };
+    expect(detail.applicationTarget?.key).toBe('greenhouse-acme');
+    expect(detail.listings.map((entry) => entry.sourceKey)).toContain('remoteok');
+
+    // Source registry exposes the reviewed policy notes for real sources.
+    const sourcesResponse = await app.inject({ method: 'GET', url: '/v1/sources', headers: withCookie() });
+    const sourceRows = (sourcesResponse.json() as { items: Array<{ key: string; policyNotes: string | null }> }).items;
+    const remoteok = sourceRows.find((row) => row.key === 'remoteok');
+    expect(remoteok?.policyNotes).toContain('reviewed:');
   });
 });

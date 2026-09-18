@@ -12,9 +12,11 @@ import type {
   Db,
   createAuditRepo,
   createCandidateRepo,
+  createDedupRepo,
   createJobRepo,
   createResumeRepo,
   createSearchRepo,
+  createStatsRepo,
 } from '@job-system/database';
 import type { Logger } from '@job-system/observability';
 import type { Env } from '@job-system/shared';
@@ -25,6 +27,8 @@ export interface ApiRepos {
   job: ReturnType<typeof createJobRepo>;
   search: ReturnType<typeof createSearchRepo>;
   audit: ReturnType<typeof createAuditRepo>;
+  dedup: ReturnType<typeof createDedupRepo>;
+  stats: ReturnType<typeof createStatsRepo>;
 }
 
 export interface ApiCtx {
@@ -35,6 +39,7 @@ export interface ApiCtx {
   redis: IORedis;
   storage: StoragePort;
   searchQueue: Queue;
+  maintenanceQueue: Queue;
   clock: Clock;
   repos: ApiRepos;
 }

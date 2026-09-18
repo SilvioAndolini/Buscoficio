@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { HardFilterConfigSchema } from '@job-system/core';
 import { searchRunJobId } from '@job-system/shared';
 import { parse, type ApiCtx } from '../context.js';
 
@@ -13,7 +14,22 @@ const SearchConfigInputSchema = z.object({
   sources: z.array(z.string().trim().min(1)).min(1),
   intervalMinutes: z.number().int().min(5).max(10_080).default(1440),
   mode: z.enum(['manual', 'assisted', 'auto']).default('assisted'),
+  filters: HardFilterConfigSchema.default({}),
+  isActive: z.boolean().default(true),
 });
+
+const SearchConfigPatchSchema = SearchConfigInputSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: 'at least one field must be provided' },
+);
+
+async function requestSchedulerSync(ctx: ApiCtx, correlationId: string): Promise<void> {
+  await ctx.maintenanceQueue.add(
+    'scheduler.sync',
+    { correlationId },
+    { attempts: 2, removeOnComplete: 200, removeOnFail: 200 },
+  );
+}
 
 export function registerSearchRoutes(app: FastifyInstance, ctx: ApiCtx): void {
   app.get('/v1/search-configs', async () => ({ items: await ctx.repos.search.listConfigs() }));
@@ -30,8 +46,35 @@ export function registerSearchRoutes(app: FastifyInstance, ctx: ApiCtx): void {
       sources: input.sources,
       intervalMinutes: input.intervalMinutes,
       mode: input.mode,
+      filters: input.filters,
+      isActive: input.isActive,
     });
+    await ctx.repos.audit.append({
+      actor: 'user',
+      action: 'search_config.created',
+      entityType: 'search_config',
+      entityId: row.id,
+      correlationId: request.id,
+    });
+    await requestSchedulerSync(ctx, request.id);
     reply.status(201);
+    return row;
+  });
+
+  app.patch('/v1/search-configs/:id', async (request) => {
+    const { id } = parse(IdParamsSchema, request.params);
+    const patch = parse(SearchConfigPatchSchema, request.body, 'search config patch');
+    await ctx.repos.search.getConfig(id);
+    const row = await ctx.repos.search.updateConfig(id, patch);
+    await ctx.repos.audit.append({
+      actor: 'user',
+      action: 'search_config.updated',
+      entityType: 'search_config',
+      entityId: id,
+      after: patch,
+      correlationId: request.id,
+    });
+    await requestSchedulerSync(ctx, request.id);
     return row;
   });
 

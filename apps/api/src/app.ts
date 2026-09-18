@@ -13,9 +13,11 @@ import {
 import {
   createAuditRepo,
   createCandidateRepo,
+  createDedupRepo,
   createJobRepo,
   createResumeRepo,
   createSearchRepo,
+  createStatsRepo,
   type DbHandle,
 } from '@job-system/database';
 import type { Logger } from '@job-system/observability';
@@ -29,6 +31,9 @@ import { registerProfileRoutes } from './routes/profile.js';
 import { registerResumeRoutes } from './routes/resumes.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerSearchRoutes } from './routes/search.js';
+import { registerSourceRoutes } from './routes/sources.js';
+import { registerDedupRoutes } from './routes/dedup.js';
+import { registerStatsRoutes } from './routes/stats.js';
 
 export interface AppDeps {
   env: Env;
@@ -37,6 +42,7 @@ export interface AppDeps {
   redis: IORedis;
   storage: StoragePort;
   searchQueue: Queue;
+  maintenanceQueue: Queue;
   clock?: Clock;
 }
 
@@ -58,6 +64,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     redis: deps.redis,
     storage: deps.storage,
     searchQueue: deps.searchQueue,
+    maintenanceQueue: deps.maintenanceQueue,
     clock: deps.clock ?? systemClock,
     repos: {
       candidate: createCandidateRepo(deps.dbHandle.db),
@@ -65,6 +72,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       job: createJobRepo(deps.dbHandle.db),
       search: createSearchRepo(deps.dbHandle.db),
       audit: createAuditRepo(deps.dbHandle.db),
+      dedup: createDedupRepo(deps.dbHandle.db),
+      stats: createStatsRepo(deps.dbHandle.db),
     },
   };
 
@@ -111,6 +120,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerResumeRoutes(app, ctx);
   registerJobRoutes(app, ctx);
   registerSearchRoutes(app, ctx);
+  registerSourceRoutes(app, ctx);
+  registerDedupRoutes(app, ctx);
+  registerStatsRoutes(app, ctx);
 
   return app;
 }

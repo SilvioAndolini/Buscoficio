@@ -32,6 +32,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@job-system/job-sources": "workspace:*",
     "@job-system/worker": "workspace:*",
     "@types/pg": "^8.11.10",
     "tsup": "^8.3.5",
