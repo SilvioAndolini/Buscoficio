@@ -161,3 +161,37 @@ Migración forward-only; worker asegura espacio activo; sin feature flags que re
 Nada de `Application`, cover letters, SubmissionPort, browser automation, AUTO_APPLY, ledger,
 variantes de CV, DecisionProvider/Jev, extracción IA de skills, re-ranking con LLM ni envíos.
 `recommendedResumeId` sólo recomienda CV para matching.
+
+## 15. Fase 3.1 — saneamiento (pre-Fase 4)
+
+Correcciones sobre la implementación existente, sin rediseño:
+
+1. **Binding estricto de `EmbeddingSpace`**: antes sólo se comparaba `dimensions`, lo que permitía
+   escribir un vector de `model-B` dentro de un espacio `model-A`. Ahora `provider`, `model` y
+   `dimensions` deben coincidir (`embeddingRuntimeMatchesSpace`, core) antes de cualquier cache
+   lookup, `embed()`, escritura de embeddings, `semanticSimilarity` o creación de `JobMatch`.
+   Mismatch ⇒ **fail closed** con `AiError` tipado y metadata segura (sin credenciales); no se toca
+   `isCurrent`. El endpoint de activación de espacios rechaza (`409`) espacios incompatibles con el
+   runtime descriptor (misma función pura, sin duplicar comparaciones).
+2. **Ancla temporal**: `computeExperienceMonths(experiences, asOfDate)` usa `endDate` o, para
+   empleos abiertos, la fecha explícita que proviene de `Clock` (`matchingAsOfDate`). El motor puro
+   nunca lee el reloj de pared y falla tipado si falta el ancla con roles abiertos. Si todas las
+   experiencias están cerradas, el ancla es `null` y la identidad no depende del tiempo (sin churn
+   diario). Migración `0008` añade `job_match.matching_as_of_date` (nullable para histórico).
+3. **Identidad**: `identityHash` incorpora `matchingAsOfDate`; `candidateProfileHash` incorpora
+   aliases normalizados/ordenados (afectan `skillsMatch`); `resumeSetHash` incorpora `highlights`
+   canónicos (afectan cobertura de skills y texto de embedding). Auditoría completa de inputs en
+   `docs/producto/12`.
+4. **Configuración independiente**: `EMBEDDING_PROVIDER` (default `mock`) desacoplado de
+   `AI_PROVIDER`; `EMBEDDING_API_KEY` con fallback a `OPENAI_API_KEY`; `EMBEDDING_BASE_URL` sólo
+   aplica a embeddings. `deepseek`/`anthropic` como provider de embeddings ⇒ `ConfigError` claro
+   (no se inventan endpoints); `anthropic`/`deepseek` como `AI_PROVIDER` conviven con embeddings
+   mock/openai.
+5. **`engineVersion` `matching-v1 → matching-v2`** por el cambio material de cálculo de
+   experiencia. El histórico v1 permanece; los recomputes crean v2 current normalmente.
+6. **Datos derivados legacy**: la migración `0008` invalida `job_embedding`/`resume_embedding`
+   (no se puede probar qué vectores pre-saneamiento eran limpios). No se borran Jobs, CVs,
+   `job_match` ni espacios; los vectores se regeneran en el siguiente cálculo.
+
+Diferido (documentado, no blocker): registrar cache hits en `ai_usage` (`cached=true`) para medir
+hit rate; hoy sólo se registran llamadas reales al provider.

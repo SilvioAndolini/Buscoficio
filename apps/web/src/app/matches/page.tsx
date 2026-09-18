@@ -25,6 +25,7 @@ interface MatchDto {
     weightsVersion: string;
     embeddingSpaceId: string | null;
     semanticModel: string | null;
+    matchingAsOfDate: string | null;
     computedAt: string;
     scoreBreakdown: {
       signals: Record<string, SignalBreakdownDto>;
@@ -229,6 +230,9 @@ function MatchesContent(): ReactNode {
                 : ''}
               {` · ${item.match.engineVersion}/${item.match.weightsVersion}`}
               {item.match.semanticModel ? ` · ${item.match.semanticModel}` : ' · sin embeddings'}
+              {item.match.matchingAsOfDate
+                ? ` · evaluado al ${item.match.matchingAsOfDate.slice(0, 10)}`
+                : ' · evaluación sin dependencia temporal'}
             </p>
 
             <h3>Razones</h3>

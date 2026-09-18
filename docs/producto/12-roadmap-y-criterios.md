@@ -106,6 +106,17 @@ cola `match` desacoplada del discovery y UI `/matches` con breakdown expandible.
 Evidencia: unit matching+ai, integración Postgres/pgvector (idempotencia, caché, espacios,
 concurrencia, ranking), E2E API (ranking + recompute v1→v2) y Playwright 3/3.
 
+**Fase 3.1 — saneamiento (2026-09-18):** (1) binding estricto `EmbeddingSpace.provider/model/
+dimensions` ↔ provider real con fail-closed antes de `embed()`/escrituras y activación de espacios
+incompatibles rechazada con `409`; (2) ancla temporal `matchingAsOfDate` desde `Clock`
+(migración `0008`, columna nullable) con empleos abiertos correctamente computados y sin churn
+diario en carreras cerradas; (3) identidad ampliada: aliases en `candidateProfileHash` y
+`highlights` en `resumeSetHash` (todo input material cubierto); (4) `EMBEDDING_PROVIDER`
+independiente de `AI_PROVIDER` (`deepseek`/`anthropic` como embeddings ⇒ `ConfigError`, sin
+endpoints inventados); (5) `engineVersion` `matching-v1 → matching-v2` conservando el histórico;
+(6) invalidación de embeddings legacy en `0008` (dato derivado regenerable; Jobs/CVs/JobMatch
+intactos).
+
 ## Fase 4 — Application Preparation
 
 **Objetivo:** candidaturas completas y verificadas esperando revisión (MANUAL/ASSISTED documental).
