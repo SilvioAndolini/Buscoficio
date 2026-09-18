@@ -32,6 +32,7 @@ import { registerResumeRoutes } from './routes/resumes.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerSearchRoutes } from './routes/search.js';
 import { registerSourceRoutes } from './routes/sources.js';
+import { registerApplicationTargetRoutes } from './routes/application-targets.js';
 import { registerDedupRoutes } from './routes/dedup.js';
 import { registerStatsRoutes } from './routes/stats.js';
 
@@ -121,6 +122,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerJobRoutes(app, ctx);
   registerSearchRoutes(app, ctx);
   registerSourceRoutes(app, ctx);
+  registerApplicationTargetRoutes(app, ctx);
   registerDedupRoutes(app, ctx);
   registerStatsRoutes(app, ctx);
 

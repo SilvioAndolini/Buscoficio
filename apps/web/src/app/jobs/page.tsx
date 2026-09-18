@@ -73,7 +73,7 @@ interface JobDto {
 interface JobDetailDto {
   job: JobDto & { description: string };
   listings: Array<{ listing: { externalId: string }; sourceKey: string }>;
-  applicationTarget: { key: string; kind: string } | null;
+  applicationTarget: { key: string; kind: string; status: string } | null;
 }
 
 async function ensureSearchConfig(): Promise<SearchConfigDto> {
@@ -492,7 +492,7 @@ function JobsContent(): ReactNode {
           <p className="muted">
             {detail.listings.length} listing(s) ·{' '}
             {detail.applicationTarget
-              ? `destino: ${detail.applicationTarget.key} (${detail.applicationTarget.kind})`
+              ? `destino: ${detail.applicationTarget.key} (${detail.applicationTarget.kind}, ${detail.applicationTarget.status})`
               : 'destino de aplicación sin resolver'}
           </p>
           {detail.job.metadata?.filterDecision ? (
