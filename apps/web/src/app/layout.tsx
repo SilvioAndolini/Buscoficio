@@ -18,6 +18,7 @@ export default function RootLayout({ children }: { children: ReactNode }): React
           <Link href="/profile">Perfil</Link>
           <Link href="/resumes">CVs</Link>
           <Link href="/jobs">Ofertas</Link>
+          <Link href="/matches">Matching</Link>
         </nav>
         <main>{children}</main>
       </body>
