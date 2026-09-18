@@ -21,7 +21,16 @@ let migrated = false;
 export async function createTestDb(): Promise<DbHandle> {
   const url = requireTestDatabaseUrl();
   if (!migrated) {
-    await runMigrations(url);
+    // Serialize migrations across concurrent test processes (advisory lock):
+    // CREATE SCHEMA IF NOT EXISTS races are not safe under concurrency.
+    const { pool } = createDb(url, { max: 1 });
+    try {
+      await pool.query('select pg_advisory_lock(727001)');
+      await runMigrations(url);
+    } finally {
+      await pool.query('select pg_advisory_unlock(727001)');
+      await pool.end();
+    }
     migrated = true;
   }
   const handle = createDb(url, { max: 5 });

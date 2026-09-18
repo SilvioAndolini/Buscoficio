@@ -15,6 +15,13 @@
       "when": 1789693547978,
       "tag": "0001_next_mojo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789698224406,
+      "tag": "0002_pretty_satana",
+      "breakpoints": true
     }
   ]
 }

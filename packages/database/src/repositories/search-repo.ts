@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { NotFoundError } from '@job-system/core';
 import { uuidv7 } from '@job-system/shared';
 import type { Db } from '../client.js';
@@ -14,6 +14,19 @@ export interface SearchConfigData {
   intervalMinutes: number;
   mode: 'manual' | 'assisted' | 'auto';
   filters?: Record<string, unknown>;
+  isActive?: boolean;
+}
+
+export interface SearchConfigPatch {
+  name?: string | undefined;
+  keywords?: string[] | undefined;
+  locations?: string[] | undefined;
+  remote?: boolean | null | undefined;
+  sources?: string[] | undefined;
+  intervalMinutes?: number | undefined;
+  mode?: 'manual' | 'assisted' | 'auto' | undefined;
+  filters?: Record<string, unknown> | undefined;
+  isActive?: boolean | undefined;
 }
 
 export interface SourceRunResult {
@@ -44,9 +57,31 @@ export function createSearchRepo(db: Db) {
           intervalMinutes: data.intervalMinutes,
           mode: data.mode,
           filters: data.filters ?? {},
+          isActive: data.isActive ?? true,
         })
         .returning();
       return row!;
+    },
+
+    async updateConfig(id: string, patch: SearchConfigPatch) {
+      const [row] = await db
+        .update(t.searchConfig)
+        .set({
+          ...(patch.name === undefined ? {} : { name: patch.name }),
+          ...(patch.keywords === undefined ? {} : { keywords: [...patch.keywords] }),
+          ...(patch.locations === undefined ? {} : { locations: [...patch.locations] }),
+          ...(patch.remote === undefined ? {} : { remote: patch.remote }),
+          ...(patch.sources === undefined ? {} : { sources: [...patch.sources] }),
+          ...(patch.intervalMinutes === undefined ? {} : { intervalMinutes: patch.intervalMinutes }),
+          ...(patch.mode === undefined ? {} : { mode: patch.mode }),
+          ...(patch.filters === undefined ? {} : { filters: patch.filters }),
+          ...(patch.isActive === undefined ? {} : { isActive: patch.isActive }),
+          updatedAt: new Date(),
+        })
+        .where(eq(t.searchConfig.id, id))
+        .returning();
+      if (!row) throw new NotFoundError(`Search config not found: ${id}`);
+      return row;
     },
 
     async listConfigs() {
@@ -172,6 +207,34 @@ export function createSearchRepo(db: Db) {
           .returning();
         return { ...updated!, finalized: true as const };
       });
+    },
+
+    /** Watchdog: runs stuck in `running` beyond the configured timeout. */
+    async listStaleRuns(timeoutMs: number) {
+      const cutoff = new Date(Date.now() - timeoutMs);
+      return db
+        .select()
+        .from(t.searchRun)
+        .where(and(eq(t.searchRun.status, 'running'), lt(t.searchRun.startedAt, cutoff)))
+        .orderBy(t.searchRun.startedAt);
+    },
+
+    /** Watchdog: fail source runs still running for a stale parent run. */
+    async failRunningSourceRuns(searchRunId: string, errorClass: string, errorDetail: string) {
+      const rows = await db
+        .update(t.searchSourceRun)
+        .set({
+          status: 'failed',
+          finishedAt: new Date(),
+          errorClass,
+          errorDetail,
+          errors: sql`${t.searchSourceRun.errors} + 1`,
+        })
+        .where(
+          and(eq(t.searchSourceRun.searchRunId, searchRunId), eq(t.searchSourceRun.status, 'running')),
+        )
+        .returning();
+      return rows;
     },
   };
 }

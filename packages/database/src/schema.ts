@@ -297,7 +297,9 @@ export const job = pgTable(
     title: text('title').notNull(),
     titleNorm: text('title_norm').notNull(),
     description: text('description').notNull(),
+    descriptionNorm: text('description_norm').notNull().default(''),
     location: text('location'),
+    locationNorm: text('location_norm').notNull().default(''),
     remoteType: text('remote_type'),
     employmentType: text('employment_type'),
     salaryMin: integer('salary_min'),
@@ -324,6 +326,7 @@ export const job = pgTable(
     index('job_status_published_idx').on(table.status, table.publishedAt),
     index('job_target_idx').on(table.applicationTargetId),
     index('job_title_trgm_idx').using('gin', sql`${table.titleNorm} gin_trgm_ops`),
+    index('job_company_location_idx').on(table.companyNorm, table.locationNorm),
   ],
 );
 
@@ -456,6 +459,39 @@ export const decisionLog = pgTable(
   ],
 );
 
+/* ------------------------------------------------------------------ */
+/* Fuzzy dedup review (Phase 2)                                        */
+/* ------------------------------------------------------------------ */
+
+export const dedupReview = pgTable(
+  'dedup_review',
+  {
+    id: uuid('id').primaryKey(),
+    candidateJobId: uuid('candidate_job_id')
+      .notNull()
+      .references(() => job.id, { onDelete: 'cascade' }),
+    createdJobId: uuid('created_job_id')
+      .notNull()
+      .references(() => job.id, { onDelete: 'cascade' }),
+    listingId: uuid('listing_id').references(() => jobListing.id, { onDelete: 'set null' }),
+    sourceId: uuid('source_id').references(() => jobSource.id, { onDelete: 'set null' }),
+    score: numeric('score', { precision: 5, scale: 4 }).notNull(),
+    titleSimilarity: numeric('title_similarity', { precision: 5, scale: 4 }).notNull(),
+    descriptionSimilarity: numeric('description_similarity', { precision: 5, scale: 4 }).notNull(),
+    reasons: jsonb('reasons').notNull().default(emptyJson),
+    status: text('status').notNull().default('pending'),
+    decision: text('decision'),
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('dedup_review_status_idx').on(table.status, table.createdAt),
+    index('dedup_review_candidate_idx').on(table.candidateJobId),
+    index('dedup_review_created_idx').on(table.createdJobId),
+  ],
+);
+
 export const auditLog = pgTable(
   'audit_log',
   {
@@ -492,6 +528,7 @@ export type JobSourceRow = typeof jobSource.$inferSelect;
 export type ApplicationTargetRow = typeof applicationTarget.$inferSelect;
 export type JobListingRow = typeof jobListing.$inferSelect;
 export type JobRow = typeof job.$inferSelect;
+export type DedupReviewRow = typeof dedupReview.$inferSelect;
 export type SearchConfigRow = typeof searchConfig.$inferSelect;
 export type SearchRunRow = typeof searchRun.$inferSelect;
 export type SearchSourceRunRow = typeof searchSourceRun.$inferSelect;

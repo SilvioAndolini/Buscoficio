@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { NormalizedJobSchema, type NormalizedJob } from '@job-system/core';
 import type { DbHandle } from '../src/client.js';
-import { createJobRepo } from '../src/repositories/index.js';
+import { createDedupRepo, createJobRepo } from '../src/repositories/index.js';
 import { createTestDb, truncateAll } from '../src/testing.js';
 
 const hasDatabase = Boolean(process.env['TEST_DATABASE_URL']);
@@ -227,5 +227,123 @@ describeDb('ingest idempotency (L0–L2)', () => {
     expect(job.applicationTargetId).toBe(greenhouse.id);
     const mergedListing = listings.find((entry) => entry.listing.externalId === 'm-003');
     expect(mergedListing?.listing.applicationTargetId).toBe(lever.id);
+  });
+
+  it('auto-merges L3 fuzzy duplicates when above the high threshold', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.5, medium: 0.05 };
+
+    const first = await repo.ingestJob({
+      ...ingestData({ externalId: 'l3-1' }),
+      sourceId: source.id,
+      fuzzy: { thresholds },
+    });
+    expect(first.outcome).toBe('new');
+
+    const merged = await repo.ingestJob({
+      ...ingestData({
+        externalId: 'l3-2',
+        urlHash: 'hash-l3-2',
+        dedupKey: 'fingerprint-l3-2',
+        normalizedJob: normalized({
+          externalId: 'l3-2',
+          canonicalUrl: 'https://jobs.example.com/acme/senior-react-developer-2',
+          description:
+            'Build internal tools with React and TypeScript. You will mentor two engineers.',
+        }),
+      }),
+      sourceId: source.id,
+      fuzzy: { thresholds },
+    });
+
+    expect(merged.outcome).toBe('merged');
+    expect(merged.reasons.join(' ')).toContain('L3');
+    expect(merged.fuzzy?.decision).toBe('merge');
+    expect(await repo.countJobs()).toBe(1);
+  });
+
+  it('queues the L3 gray zone for human review and never auto-merges it', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.999, medium: 0.05 };
+
+    const first = await repo.ingestJob({
+      ...ingestData({ externalId: 'gray-1' }),
+      sourceId: source.id,
+      fuzzy: { thresholds },
+    });
+    const second = await repo.ingestJob({
+      ...ingestData({
+        externalId: 'gray-2',
+        urlHash: 'hash-gray-2',
+        dedupKey: 'fingerprint-gray-2',
+        normalizedJob: normalized({
+          externalId: 'gray-2',
+          canonicalUrl: 'https://jobs.example.com/acme/senior-react-developer-gray',
+          description:
+            'Build internal tools with React and TypeScript. You will mentor two engineers.',
+        }),
+      }),
+      sourceId: source.id,
+      fuzzy: { thresholds },
+    });
+
+    expect(second.outcome).toBe('new');
+    expect(second.fuzzy?.decision).toBe('review');
+    expect(second.reviewId).toBeTruthy();
+    expect(second.reasons.join(' ')).toContain('gray zone');
+    expect(await repo.countJobs()).toBe(2);
+
+    const reviews = await createDedupRepo(handle.db).listReviews('pending', 50);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.review.status).toBe('pending');
+    expect(reviews[0]!.review.candidateJobId).toBe(first.jobId);
+    expect(reviews[0]!.review.createdJobId).toBe(second.jobId);
+
+    // Human decision: merging moves the listing and archives the loser.
+    const decided = await createDedupRepo(handle.db).decideReview(
+      reviews[0]!.review.id,
+      'merged',
+      'user',
+    );
+    expect(decided.review.status).toBe('decided');
+    expect(decided.review.decision).toBe('merged');
+    const winner = await repo.getJobWithListings(first.jobId!);
+    expect(winner.listings).toHaveLength(2);
+    const loser = await repo.getJobWithListings(second.jobId!);
+    expect(loser.job.status).toBe('archived');
+    expect(loser.listings).toHaveLength(0);
+
+    await expect(
+      createDedupRepo(handle.db).decideReview(reviews[0]!.review.id, 'kept-separate', 'user'),
+    ).rejects.toThrow();
+  });
+
+  it('treats offers from different companies as distinct (no fuzzy candidate)', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.5, medium: 0.05 };
+
+    await repo.ingestJob({ ...ingestData({ externalId: 'distinct-1' }), sourceId: source.id, fuzzy: { thresholds } });
+    const second = await repo.ingestJob({
+      ...ingestData({
+        externalId: 'distinct-2',
+        urlHash: 'hash-distinct-2',
+        dedupKey: 'fingerprint-distinct-2',
+        normalizedJob: normalized({
+          externalId: 'distinct-2',
+          canonicalUrl: 'https://jobs.example.com/globex/senior-react-developer',
+          company: 'Globex',
+        }),
+      }),
+      sourceId: source.id,
+      fuzzy: { thresholds },
+    });
+
+    expect(second.outcome).toBe('new');
+    expect(second.fuzzy?.decision).toBe('distinct');
+    expect(second.reviewId).toBeNull();
+    expect(await repo.countJobs()).toBe(2);
   });
 });
