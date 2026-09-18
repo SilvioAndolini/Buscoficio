@@ -18,6 +18,8 @@ export interface SourceCapabilities {
   requiresHumanLogin: boolean;
   supportsPagination: boolean;
   pageSize: number;
+  /** Conservative self-imposed limit per minute (never used to bypass limits). */
+  rateLimitPerMinute?: number;
 }
 
 /**

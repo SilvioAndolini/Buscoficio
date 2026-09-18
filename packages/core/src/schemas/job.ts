@@ -15,6 +15,8 @@ export const RawJobSchema = z.object({
   externalId: nonEmptyString,
   fetchedAt: z.date(),
   data: z.unknown(),
+  /** Redirect chain observed while fetching the offer (target detection). */
+  redirects: z.array(z.string()).optional(),
 });
 export type RawJob = z.infer<typeof RawJobSchema>;
 
@@ -50,9 +52,21 @@ export type NormalizedJob = z.infer<typeof NormalizedJobSchema>;
 export const IngestOutcomeSchema = z.enum(['new', 'merged', 'duplicate', 'rejected']);
 export type IngestOutcome = z.infer<typeof IngestOutcomeSchema>;
 
+export interface IngestFuzzyInfo {
+  decision: 'merge' | 'review' | 'distinct';
+  candidateJobId: string | null;
+  score: number | null;
+  titleSimilarity: number | null;
+  descriptionSimilarity: number | null;
+}
+
 export interface IngestResult {
   outcome: IngestOutcome;
   listingId: string | null;
   jobId: string | null;
   reasons: string[];
+  /** Present when L3 fuzzy dedup evaluated candidates. */
+  fuzzy?: IngestFuzzyInfo;
+  /** Present when the gray zone created a dedup_review row. */
+  reviewId?: string | null;
 }

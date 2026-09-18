@@ -119,3 +119,34 @@ export function computeJobContentHash(input: JobContentHashInput): string {
     ].join('|'),
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Fuzzy (L3) deduplication — deterministic, explainable thresholds    */
+/* ------------------------------------------------------------------ */
+
+export interface DedupThresholds {
+  high: number;
+  medium: number;
+}
+
+/** Defaults live here only; callers pass configured thresholds down. */
+export const DEFAULT_DEDUP_THRESHOLDS: DedupThresholds = { high: 0.92, medium: 0.75 };
+
+export const FUZZY_TITLE_WEIGHT = 0.6;
+export const FUZZY_DESCRIPTION_WEIGHT = 0.4;
+
+export type FuzzyDecision = 'merge' | 'review' | 'distinct';
+
+export function computeFuzzyScore(titleSimilarity: number, descriptionSimilarity: number): number {
+  const clamp = (value: number): number => Math.min(1, Math.max(0, value));
+  return clamp(
+    titleSimilarity * FUZZY_TITLE_WEIGHT + descriptionSimilarity * FUZZY_DESCRIPTION_WEIGHT,
+  );
+}
+
+/** HIGH → auto merge, MEDIUM → human review, LOW → distinct jobs. */
+export function resolveFuzzyDecision(score: number, thresholds: DedupThresholds): FuzzyDecision {
+  if (score >= thresholds.high) return 'merge';
+  if (score >= thresholds.medium) return 'review';
+  return 'distinct';
+}

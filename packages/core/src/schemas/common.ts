@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export const RemoteTypeSchema = z.enum(['onsite', 'hybrid', 'remote', 'unknown']);
+export type RemoteType = z.infer<typeof RemoteTypeSchema>;
+
 export const EmploymentTypeSchema = z.enum([
   'full_time',
   'part_time',
@@ -9,6 +11,8 @@ export const EmploymentTypeSchema = z.enum([
   'temporary',
   'other',
 ]);
+export type EmploymentType = z.infer<typeof EmploymentTypeSchema>;
+
 export const ExperienceLevelSchema = z.enum([
   'intern',
   'junior',
@@ -18,7 +22,10 @@ export const ExperienceLevelSchema = z.enum([
   'principal',
   'unknown',
 ]);
+export type ExperienceLevel = z.infer<typeof ExperienceLevelSchema>;
+
 export const ApplicationMethodSchema = z.enum(['api', 'external_form', 'email', 'unknown']);
+export type ApplicationMethod = z.infer<typeof ApplicationMethodSchema>;
 export const SkillLevelSchema = z.enum(['beginner', 'intermediate', 'advanced', 'expert']);
 export const LanguageLevelSchema = z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'native']);
 export const EducationStatusSchema = z.enum(['completed', 'in_progress', 'dropped']);
