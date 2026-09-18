@@ -38,6 +38,12 @@ export const EnvSchema = z.object({
   AI_PROVIDER: z.enum(['openai', 'anthropic', 'deepseek', 'mock']).default('mock'),
   DECISION_PROVIDER: z.enum(['jev', 'llm-adapter', 'mock']).default('mock'),
   AI_MONTHLY_BUDGET_USD: z.coerce.number().nonnegative().default(20),
+
+  /** Phase 2 discovery tuning (single source of truth for thresholds). */
+  DEDUP_L3_HIGH_THRESHOLD: z.coerce.number().min(0).max(1).default(0.92),
+  DEDUP_L3_MEDIUM_THRESHOLD: z.coerce.number().min(0).max(1).default(0.75),
+  WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(10_000).default(900_000),
+  SCHEDULER_ENABLED: booleanFromEnv(true),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -63,6 +69,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (env.NODE_ENV === 'production' && !env.AUTH_COOKIE_SECURE) {
     throw new ConfigError([
       'AUTH_COOKIE_SECURE: insecure session cookie in production (set AUTH_COOKIE_SECURE=true behind TLS)',
+    ]);
+  }
+  if (env.DEDUP_L3_MEDIUM_THRESHOLD >= env.DEDUP_L3_HIGH_THRESHOLD) {
+    throw new ConfigError([
+      'DEDUP_L3_MEDIUM_THRESHOLD must be lower than DEDUP_L3_HIGH_THRESHOLD',
     ]);
   }
   return env;

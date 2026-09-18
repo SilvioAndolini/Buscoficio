@@ -28,3 +28,8 @@ export function searchRunJobId(searchConfigId: string, scheduledEpochMs: number)
 export function ingestSourceJobId(searchRunId: string, sourceKey: string): string {
   return `search-src-${safeQueueIdPart(searchRunId)}-${safeQueueIdPart(sourceKey)}`;
 }
+
+/** BullMQ Job Scheduler id for a SearchConfig (one scheduler per config). */
+export function schedulerIdForSearchConfig(searchConfigId: string): string {
+  return `search-config-${safeQueueIdPart(searchConfigId)}`;
+}
