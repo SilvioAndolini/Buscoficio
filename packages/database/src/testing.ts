@@ -37,6 +37,14 @@ export async function createTestDb(): Promise<DbHandle> {
   return handle;
 }
 
+/**
+ * Test cleanup. Background workers may still be writing (e.g. matching jobs
+ * enqueued by a just-finished search run), so the truncate uses a bounded
+ * lock timeout and retries on deadlock/lock-not-available instead of failing
+ * the suite intermittently.
+ */
+const RETRYABLE_LOCK_CODES = new Set(['40P01', '55P03']);
+
 export async function truncateAll(db: Db): Promise<void> {
   const result = await db.execute(
     sql`select tablename from pg_tables where schemaname = 'public' and tablename not like '\\_\\_drizzle%' escape '\\'`,
@@ -44,5 +52,22 @@ export async function truncateAll(db: Db): Promise<void> {
   const rows = result.rows as Array<{ tablename: string }>;
   if (rows.length === 0) return;
   const tables = rows.map((row) => `"public"."${row.tablename}"`).join(', ');
-  await db.execute(sql.raw(`truncate table ${tables} restart identity cascade`));
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout = '10s'`);
+        await tx.execute(sql.raw(`truncate table ${tables} restart identity cascade`));
+      });
+      return;
+    } catch (error) {
+      const cause = (error as { cause?: { code?: string } }).cause ?? error;
+      const code = (cause as { code?: string }).code;
+      if (code !== undefined && RETRYABLE_LOCK_CODES.has(code) && attempt < 5) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 200 * attempt));
+        continue;
+      }
+      throw error;
+    }
+  }
 }
