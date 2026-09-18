@@ -70,6 +70,12 @@ activación de targets condicionada a `policyReview` explícita (revisión persi
 del servidor y `reviewed_by`, audit `application_target.policy_reviewed`; sin revisión → `422
 POLICY_DENIED`). Evidencia: 160 tests de integración + 2 E2E Playwright + CI `ci`/`e2e` en verde.
 
+**Fase 2.3 — edge case legacy final verificado (2026-09-18):** migración `0006` bloquea el estado
+`active` + nota “pending separate platform policy review” sin `reviewed_at/reviewed_by`; las reviews
+estructuradas permanecen `active` y la evidencia textual legacy se conserva intacta (conservador).
+Test de upgrade en 3 etapas (0000–0003 → 0004–0005 → 0006) con 6 casos + idempotencia, en CI.
+Evidencia: 161 tests de integración + 2 E2E Playwright + CI `ci`/`e2e` en verde.
+
 ## Fase 3 — Matching
 
 **Objetivo:** ranking explicable, versionado y reproducible con espacios de embeddings.

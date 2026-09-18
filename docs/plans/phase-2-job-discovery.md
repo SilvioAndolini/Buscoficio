@@ -88,3 +88,14 @@ Correcciones aplicadas y verificadas:
 - E2E API actualizado: rechazo sin review, activación con review (notas + reviewedAt/By persistidos +
   audit), pause y reactivación reutilizando la revisión.
 
+## Fase 2.3 — edge case legacy final (2026-09-18)
+
+- **Migración 0006** (`sanitize_active_targets_without_review`): bloquea `active` sin review
+  estructurada (`reviewed_at/reviewed_by` nulos) cuando `policy_notes` es NULL **o** contiene la nota
+  automática de revisión pendiente. Patrón seguro: las reviews reales contienen “Review completed” y
+  nunca “pending separate platform policy review”; la evidencia textual legacy se conserva intacta
+  (conservador: no se inventan fecha/actor). Idempotente y forward-only.
+- **Test de upgrade en 3 etapas**: 0000–0003 → legacy pre-hardening → 0004–0005 → legacy Fase 2.1 →
+  0006 → verificación de los 6 casos (NULL, pending note, review estructurada, review textual,
+  blocked, paused) + idempotencia. Se ejecuta en CI junto al fresh install.
+

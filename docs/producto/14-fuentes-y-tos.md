@@ -47,7 +47,12 @@ pipeline puede ejecutar **enrichment de redirects** (presupuesto por run + rate 
   newStatus, reviewedBy, reviewedAt, reference) y los cambios de estado `application_target.status_changed`.
 - **Legacy**: la migración `0005` bloquea los targets auto-detectados de Fase 2 que quedaron
   `status='active'` con `policy_notes NULL` (sin evidencia de revisión), preservando intactos los que
-  sí tienen notas y los ya bloqueados. La migración es idempotente y forward-only.
+  sí tienen notas y los ya bloqueados. La migración `0006` cubre el estado de Fase 2.1
+  (`active` + nota automática “pending separate platform policy review” + `reviewed_at/reviewed_by`
+  nulos): lo bloquea. Las reviews estructuradas (`reviewed_at`/`reviewed_by`) permanecen `active` sin
+  cambios; la evidencia textual antigua (p. ej. “Reviewed policy 2026-01-01 by user.”) se conserva
+  intacta a propósito (no se puede derivar fecha/actor de forma fiable y nunca se inventan datos):
+  queda documentada para revisión manual. Ambas migraciones son idempotentes y forward-only.
 - Revisión por plataforma (greenhouse, lever, workday, ashby, workable, smartrecruiters) pendiente
   antes de habilitar envíos reales (Fases 5/6).
 
