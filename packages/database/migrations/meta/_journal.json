@@ -22,6 +22,13 @@
       "when": 1789698224406,
       "tag": "0002_pretty_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789746305552,
+      "tag": "0003_stormy_lizard",
+      "breakpoints": true
     }
   ]
 }

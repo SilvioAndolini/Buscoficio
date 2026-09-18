@@ -76,6 +76,13 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       );
       expect(fk).toBeDefined();
       expect(fk!.confdeltype).toBe('r');
+
+      // Phase 2.1: auto-detected targets must default to blocked.
+      const defaults = await db.execute(
+        sql`select column_default from information_schema.columns where table_name = 'application_target' and column_name = 'status'`,
+      );
+      const statusDefault = (defaults.rows as Array<{ column_default: string | null }>)[0];
+      expect(statusDefault?.column_default).toContain('blocked');
     } finally {
       await pool.end();
     }

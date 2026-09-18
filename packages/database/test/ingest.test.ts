@@ -346,4 +346,198 @@ describeDb('ingest idempotency (L0–L2)', () => {
     expect(second.reviewId).toBeNull();
     expect(await repo.countJobs()).toBe(2);
   });
+
+  /* ------------------------------------------------------------------ */
+  /* Phase 2.1 — target safe defaults and concurrency                    */
+  /* ------------------------------------------------------------------ */
+
+  it('auto-detected targets start blocked with pending-review notes and are never silently reset', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+
+    const detected = await repo.upsertTarget({
+      key: 'greenhouse-acme',
+      kind: 'ats_browser',
+      platform: 'greenhouse',
+      label: 'greenhouse-acme',
+    });
+    expect(detected.status).toBe('blocked');
+    expect(detected.policyNotes).toContain('pending separate platform policy review');
+
+    // Re-detection must not reset authorization nor overwrite notes.
+    const reDetected = await repo.upsertTarget({
+      key: 'greenhouse-acme',
+      kind: 'ats_browser',
+      platform: 'greenhouse',
+      label: 'greenhouse-acme',
+    });
+    expect(reDetected.status).toBe('blocked');
+    expect(reDetected.policyNotes).toBe(detected.policyNotes);
+
+    // Explicit (audited at API level) review authorizes submission later.
+    const authorized = await repo.updateTargetStatus('greenhouse-acme', 'active');
+    expect(authorized.status).toBe('active');
+    const after = await repo.upsertTarget({
+      key: 'greenhouse-acme',
+      kind: 'ats_browser',
+      platform: 'greenhouse',
+      label: 'greenhouse-acme',
+    });
+    expect(after.status).toBe('active');
+
+    // Discovery association still works with a blocked target.
+    const blockedTarget = await repo.upsertTarget({
+      key: 'lever-globex',
+      kind: 'ats_browser',
+      platform: 'lever',
+      label: 'lever-globex',
+    });
+    const result = await repo.ingestJob({
+      ...ingestData({ externalId: 'blocked-target-1', applicationTargetId: blockedTarget.id }),
+      sourceId: source.id,
+    });
+    const { job } = await repo.getJobWithListings(result.jobId!);
+    expect(job.applicationTargetId).toBe(blockedTarget.id);
+  });
+
+  it('is concurrency-safe under L3 HIGH: equivalent offers merge into one canonical job', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.5, medium: 0.05 };
+
+    for (let round = 0; round < 5; round += 1) {
+      const company = `Concurrent Acme ${round}`;
+      const build = (suffix: string) => ({
+        ...ingestData({
+          externalId: `c${round}-${suffix}`,
+          urlHash: `hash-${round}-${suffix}`,
+          dedupKey: `fp-${round}-${suffix}`,
+          normalizedJob: normalized({
+            externalId: `c${round}-${suffix}`,
+            canonicalUrl: `https://jobs.example.com/${company.replace(/ /g, '-')}/${suffix}`,
+            company,
+          }),
+        }),
+        sourceId: source.id,
+        fuzzy: { thresholds },
+      });
+
+      await Promise.all([repo.ingestJob(build('a')), repo.ingestJob(build('b'))]);
+
+      const jobs = (await repo.listJobs({ limit: 500, offset: 0 })).filter(
+        (row) => row.job.company === company,
+      );
+      expect(jobs).toHaveLength(1);
+      const { listings } = await repo.getJobWithListings(jobs[0]!.job.id);
+      expect(listings).toHaveLength(2);
+    }
+  });
+
+  it('is concurrency-safe in the L3 gray zone: never auto-merges, one pending review', async () => {
+    const repo = createJobRepo(handle.db);
+    const dedupRepo = createDedupRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.999, medium: 0.05 };
+
+    for (let round = 0; round < 5; round += 1) {
+      const company = `Gray Concurrent Acme ${round}`;
+      await Promise.all([
+        repo.ingestJob({
+          ...ingestData({
+            externalId: `g${round}-a`,
+            urlHash: `hash-g${round}-a`,
+            dedupKey: `fp-g${round}-a`,
+            normalizedJob: normalized({
+              externalId: `g${round}-a`,
+              canonicalUrl: `https://jobs.example.com/gray/${round}/a`,
+              company,
+            }),
+          }),
+          sourceId: source.id,
+          fuzzy: { thresholds },
+        }),
+        repo.ingestJob({
+          ...ingestData({
+            externalId: `g${round}-b`,
+            urlHash: `hash-g${round}-b`,
+            dedupKey: `fp-g${round}-b`,
+            normalizedJob: normalized({
+              externalId: `g${round}-b`,
+              canonicalUrl: `https://jobs.example.com/gray/${round}/b`,
+              company,
+              description:
+                'Build internal tools with React and TypeScript. You will mentor two engineers extensively.',
+            }),
+          }),
+          sourceId: source.id,
+          fuzzy: { thresholds },
+        }),
+      ]);
+
+      const jobs = (await repo.listJobs({ limit: 500, offset: 0 })).filter(
+        (row) => row.job.company === company,
+      );
+      expect(jobs).toHaveLength(2);
+      const pending = (await dedupRepo.listReviews('pending', 100)).filter(
+        (entry) => entry.candidateCompany === company,
+      );
+      expect(pending).toHaveLength(1);
+    }
+  });
+
+  it('promotes a detected target from a concurrent equivalent listing', async () => {
+    const repo = createJobRepo(handle.db);
+    const source = await repo.upsertSource({ key: 'mock', name: 'Mock', kind: 'api', capabilities: {} });
+    const thresholds = { high: 0.5, medium: 0.05 };
+
+    for (let round = 0; round < 3; round += 1) {
+      const company = `Target Concurrent ${round}`;
+      const target = await repo.upsertTarget({
+        key: `greenhouse-target-${round}`,
+        kind: 'ats_browser',
+        platform: 'greenhouse',
+        label: `greenhouse-target-${round}`,
+      });
+      await Promise.all([
+        repo.ingestJob({
+          ...ingestData({
+            externalId: `t${round}-a`,
+            urlHash: `hash-t${round}-a`,
+            dedupKey: `fp-t${round}-a`,
+            normalizedJob: normalized({
+              externalId: `t${round}-a`,
+              canonicalUrl: `https://jobs.example.com/target/${round}/a`,
+              company,
+            }),
+          }),
+          sourceId: source.id,
+          fuzzy: { thresholds },
+        }),
+        repo.ingestJob({
+          ...ingestData({
+            externalId: `t${round}-b`,
+            urlHash: `hash-t${round}-b`,
+            dedupKey: `fp-t${round}-b`,
+            applicationTargetId: target.id,
+            applicationTargetSignal: 'redirect',
+            normalizedJob: normalized({
+              externalId: `t${round}-b`,
+              canonicalUrl: `https://jobs.example.com/target/${round}/b`,
+              company,
+            }),
+          }),
+          sourceId: source.id,
+          fuzzy: { thresholds },
+        }),
+      ]);
+
+      const jobs = (await repo.listJobs({ limit: 500, offset: 0 })).filter(
+        (row) => row.job.company === company,
+      );
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]!.job.applicationTargetId).toBe(target.id);
+      const { listings } = await repo.getJobWithListings(jobs[0]!.job.id);
+      expect(listings).toHaveLength(2);
+    }
+  });
 });

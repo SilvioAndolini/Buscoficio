@@ -221,7 +221,8 @@ export const applicationTarget = pgTable(
     baseUrl: text('base_url'),
     capabilities: jsonb('capabilities').notNull().default(emptyJson),
     authRequired: boolean('auth_required').notNull().default(false),
-    status: text('status').notNull().default('active'),
+    // Auto-detected targets start blocked: detection is not authorization.
+    status: text('status').notNull().default('blocked'),
     policyNotes: text('policy_notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

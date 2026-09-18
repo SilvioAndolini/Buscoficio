@@ -1,0 +1,1 @@
+ALTER TABLE "application_target" ALTER COLUMN "status" SET DEFAULT 'blocked';

@@ -6,6 +6,7 @@ import {
   computeFuzzyScore,
   normalizeForDedup,
   resolveFuzzyDecision,
+  targetPolicyNotes,
   type DedupThresholds,
   type FilterDecision,
 } from '@job-system/core';
@@ -75,6 +76,10 @@ export function createJobRepo(db: Db) {
       return db.select().from(t.jobSource).orderBy(t.jobSource.key);
     },
 
+    async listTargets() {
+      return db.select().from(t.applicationTarget).orderBy(t.applicationTarget.key);
+    },
+
     async updateSourceStatus(key: string, status: 'active' | 'paused' | 'blocked') {
       const [row] = await db
         .update(t.jobSource)
@@ -93,6 +98,8 @@ export function createJobRepo(db: Db) {
       baseUrl?: string | null;
       capabilities?: Record<string, unknown>;
       policyNotes?: string | null;
+      /** Auto-detection must not authorize submission: default is blocked. */
+      status?: 'active' | 'blocked' | 'paused';
     }) {
       const [row] = await db
         .insert(t.applicationTarget)
@@ -104,18 +111,31 @@ export function createJobRepo(db: Db) {
           label: data.label,
           baseUrl: data.baseUrl ?? null,
           capabilities: data.capabilities ?? {},
-          ...(data.policyNotes === undefined ? {} : { policyNotes: data.policyNotes }),
+          status: data.status ?? 'blocked',
+          policyNotes: data.policyNotes ?? targetPolicyNotes(data.platform),
         })
         .onConflictDoUpdate({
           target: t.applicationTarget.key,
           set: {
             label: data.label,
-            ...(data.policyNotes === undefined ? {} : { policyNotes: data.policyNotes }),
+            // Keep existing authorization status and never overwrite reviewed
+            // notes; fill the safe default when the target has none.
+            policyNotes: sql`coalesce(${t.applicationTarget.policyNotes}, excluded.policy_notes)`,
             updatedAt: new Date(),
           },
         })
         .returning();
       return row!;
+    },
+
+    async updateTargetStatus(key: string, status: 'active' | 'blocked' | 'paused') {
+      const [row] = await db
+        .update(t.applicationTarget)
+        .set({ status, updatedAt: new Date() })
+        .where(eq(t.applicationTarget.key, key))
+        .returning();
+      if (!row) throw new NotFoundError(`Application target not found: ${key}`);
+      return row;
     },
 
     /**
@@ -209,6 +229,12 @@ export function createJobRepo(db: Db) {
 
           let fuzzyInfo: IngestFuzzyInfo | undefined;
           if (!targetJobId && data.fuzzy) {
+            // Serialize L3 fuzzy evaluation on the blocking domain
+            // (company+location) so concurrent equivalent offers cannot both
+            // miss the candidate and create duplicate canonical jobs.
+            await tx.execute(
+              sql`select pg_advisory_xact_lock(hashtext(${`${companyNorm}|${locationNorm}`}))`,
+            );
             const thresholds = data.fuzzy.thresholds ?? DEFAULT_DEDUP_THRESHOLDS;
             const candidates = await tx.execute(sql`
               select id,
