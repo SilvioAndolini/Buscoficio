@@ -9,6 +9,7 @@ import { sha256Hex } from '@job-system/core';
 import type { Env } from '@job-system/shared';
 import { createLogger } from '@job-system/observability';
 import type { DbHandle } from '@job-system/database';
+import { createAuditRepo } from '@job-system/database';
 import { createTestDb, truncateAll } from '@job-system/database/testing';
 import { LocalStorageAdapter } from '@job-system/storage';
 import {
@@ -578,14 +579,71 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     expect(greenhouse?.status).toBe('blocked');
     expect(greenhouse?.policyNotes).toContain('pending separate platform policy review');
 
-    const authorize = await app.inject({
+    // No policy review → activation is denied with a typed error.
+    const denied = await app.inject({
       method: 'PATCH',
       url: '/v1/application-targets/greenhouse-acme',
       headers: withCookie(),
       payload: { status: 'active' },
     });
+    expect(denied.statusCode).toBe(422);
+    expect((denied.json() as { code: string }).code).toBe('POLICY_DENIED');
+
+    // Explicit review activates the target and persists the evidence.
+    const reviewNotes =
+      'E2E policy review fixture: provider terms reviewed for personal discovery.';
+    const authorize = await app.inject({
+      method: 'PATCH',
+      url: '/v1/application-targets/greenhouse-acme',
+      headers: withCookie(),
+      payload: { status: 'active', policyReview: { notes: reviewNotes } },
+    });
     expect(authorize.statusCode).toBe(200);
-    expect((authorize.json() as { status: string }).status).toBe('active');
+    const authorized = authorize.json() as {
+      id: string;
+      status: string;
+      reviewedBy: string | null;
+      reviewedAt: string | null;
+      policyNotes: string | null;
+    };
+    expect(authorized.status).toBe('active');
+    expect(authorized.reviewedBy).toBe('user');
+    expect(authorized.reviewedAt).toBeTruthy();
+    expect(authorized.policyNotes).toContain('Review completed');
+    expect(authorized.policyNotes).toContain(reviewNotes);
+
+    const audits = await createAuditRepo(handle.db).listForEntity(
+      'application_target',
+      authorized.id,
+    );
+    expect(audits.some((entry) => entry.action === 'application_target.policy_reviewed')).toBe(true);
+
+    // Pause → reactivate reuses the existing valid review (restrictive
+    // transitions never demand a new one).
+    const paused = await app.inject({
+      method: 'PATCH',
+      url: '/v1/application-targets/greenhouse-acme',
+      headers: withCookie(),
+      payload: { status: 'paused' },
+    });
+    expect(paused.statusCode).toBe(200);
+    expect((paused.json() as { status: string }).status).toBe('paused');
+
+    const reactivated = await app.inject({
+      method: 'PATCH',
+      url: '/v1/application-targets/greenhouse-acme',
+      headers: withCookie(),
+      payload: { status: 'active' },
+    });
+    expect(reactivated.statusCode).toBe(200);
+    const reactivatedBody = reactivated.json() as {
+      status: string;
+      policyNotes: string | null;
+      reviewedAt: string | null;
+    };
+    expect(reactivatedBody.status).toBe('active');
+    expect(reactivatedBody.policyNotes).toBe(authorized.policyNotes);
+    expect(reactivatedBody.reviewedAt).toBe(authorized.reviewedAt);
 
     // Source registry exposes the reviewed policy notes for real sources.
     const sourcesResponse = await app.inject({ method: 'GET', url: '/v1/sources', headers: withCookie() });
