@@ -51,6 +51,13 @@ export const EnvSchema = z.object({
    * with a chat API does NOT automatically provide embeddings.
    */
   AI_PROVIDER: z.enum(['openai', 'anthropic', 'deepseek', 'mock']).default('mock'),
+  /** Text model; required for real providers, mock has a deterministic default. */
+  AI_TEXT_MODEL: z.string().min(1).max(120).optional(),
+  /** Optional provider base URL override (documented endpoints by default). */
+  AI_BASE_URL: z.string().url().optional(),
+  /** Text generation credentials per provider (never logged). */
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  DEEPSEEK_API_KEY: z.string().min(1).optional(),
   DECISION_PROVIDER: z.enum(['jev', 'llm-adapter', 'mock']).default('mock'),
   AI_MONTHLY_BUDGET_USD: z.coerce.number().nonnegative().default(20),
 
@@ -72,6 +79,10 @@ export const EnvSchema = z.object({
   SCHEDULER_ENABLED: booleanFromEnv(true),
   /** Max redirect-enrichment requests per source run (0 disables it). */
   TARGET_ENRICHMENT_MAX_PER_RUN: z.coerce.number().int().min(0).default(25),
+
+  /** Phase 4 application preparation policy slice (never relaxed by DB). */
+  APPLICATION_PREPARATION_POLICY_VERSION: z.string().min(1).max(60).default('application-prep-v1'),
+  REAPPLICATION_COOLDOWN_DAYS: z.coerce.number().int().min(0).default(30),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -170,4 +181,44 @@ export function resolveEmbeddingRuntime(env: Env): EmbeddingRuntime {
 /** Embedding credential with documented fallback; never logged. */
 export function embeddingApiKey(env: Env): string | undefined {
   return env.EMBEDDING_API_KEY ?? env.OPENAI_API_KEY;
+}
+
+/* ------------------------------------------------------------------ */
+/* Text generation runtime (Phase 4)                                   */
+/* ------------------------------------------------------------------ */
+
+export const SUPPORTED_TEXT_PROVIDERS = ['mock', 'openai', 'anthropic', 'deepseek'] as const;
+export type TextProviderName = (typeof SUPPORTED_TEXT_PROVIDERS)[number];
+
+export interface TextRuntime {
+  provider: TextProviderName;
+  model: string;
+}
+
+const DEFAULT_TEXT_MODEL = 'mock-text-v1';
+
+/** Resolves the text runtime from configuration; typed error when incomplete. */
+export function resolveTextRuntime(env: Env): TextRuntime {
+  const model =
+    env.AI_TEXT_MODEL ?? (env.AI_PROVIDER === 'mock' ? DEFAULT_TEXT_MODEL : undefined);
+  if (model === undefined) {
+    throw new ConfigError([
+      `AI_TEXT_MODEL is required when AI_PROVIDER=${env.AI_PROVIDER}`,
+    ]);
+  }
+  return { provider: env.AI_PROVIDER, model };
+}
+
+/** Text credential per provider; never logged, never defaulted across providers. */
+export function textApiKey(env: Env): string | undefined {
+  switch (env.AI_PROVIDER) {
+    case 'openai':
+      return env.OPENAI_API_KEY;
+    case 'anthropic':
+      return env.ANTHROPIC_API_KEY;
+    case 'deepseek':
+      return env.DEEPSEEK_API_KEY;
+    case 'mock':
+      return undefined;
+  }
 }

@@ -41,3 +41,11 @@ export function schedulerIdForSearchConfig(searchConfigId: string): string {
 export function matchJobId(jobId: string, engineVersion: string): string {
   return `match-${safeQueueIdPart(jobId)}-${safeQueueIdPart(engineVersion)}`;
 }
+
+/**
+ * Document preparation job id (doc 06 §3): `prepare-<applicationId>`.
+ * Postgres (advisory lock + constraints) is the real idempotency authority.
+ */
+export function prepareApplicationJobId(applicationId: string): string {
+  return `prepare-${safeQueueIdPart(applicationId)}`;
+}

@@ -50,12 +50,21 @@ importers:
       '@fastify/multipart':
         specifier: ^9.0.3
         version: 9.4.0
+      '@job-system/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@job-system/application-engine':
+        specifier: workspace:*
+        version: link:../../packages/application-engine
       '@job-system/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@job-system/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@job-system/documents':
+        specifier: workspace:*
+        version: link:../../packages/documents
       '@job-system/matching':
         specifier: workspace:*
         version: link:../../packages/matching
@@ -130,12 +139,18 @@ importers:
       '@job-system/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@job-system/application-engine':
+        specifier: workspace:*
+        version: link:../../packages/application-engine
       '@job-system/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@job-system/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@job-system/documents':
+        specifier: workspace:*
+        version: link:../../packages/documents
       '@job-system/job-sources':
         specifier: workspace:*
         version: link:../../packages/job-sources
@@ -148,6 +163,9 @@ importers:
       '@job-system/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@job-system/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       bullmq:
         specifier: ^5.34.0
         version: 5.81.5
@@ -224,6 +242,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.23.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/pg':
         specifier: ^8.11.10
@@ -243,6 +264,9 @@ importers:
       '@job-system/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/job-sources:
     dependencies:
