@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./prompts": "./prompts/index.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "lint": "eslint --config ../../eslint.config.mjs src test",
+    "lint": "eslint --config ../../eslint.config.mjs src test prompts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
