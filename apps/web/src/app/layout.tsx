@@ -19,6 +19,7 @@ export default function RootLayout({ children }: { children: ReactNode }): React
           <Link href="/resumes">CVs</Link>
           <Link href="/jobs">Ofertas</Link>
           <Link href="/matches">Matching</Link>
+          <Link href="/applications">Candidaturas</Link>
         </nav>
         <main>{children}</main>
       </body>

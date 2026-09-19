@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { api } from '../../lib/api';
 import { LoginGate } from '../../components/login-gate';
 
@@ -59,10 +60,12 @@ const SIGNAL_LABELS: Array<{ key: string; label: string }> = [
 ];
 
 function MatchesContent(): ReactNode {
+  const router = useRouter();
   const [items, setItems] = useState<MatchDto[]>([]);
   const [total, setTotal] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [prepareMode, setPrepareMode] = useState<'manual' | 'assisted'>('assisted');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,6 +80,25 @@ function MatchesContent(): ReactNode {
       setError(cause instanceof Error ? cause.message : 'error'),
     );
   }, [load]);
+
+  async function prepare(matchId: string): Promise<void> {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await api<{ application: { id: string }; created: boolean }>(
+        '/v1/applications',
+        {
+          method: 'POST',
+          body: JSON.stringify({ matchId, mode: prepareMode }),
+        },
+      );
+      router.push(`/applications/${response.application.id}`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function recompute(): Promise<void> {
     setBusy(true);
@@ -251,6 +273,29 @@ function MatchesContent(): ReactNode {
                 </ul>
               </>
             ) : null}
+
+            <h3>Preparar candidatura</h3>
+            <div className="row">
+              <label>
+                Modo
+                <select
+                  value={prepareMode}
+                  onChange={(event) =>
+                    setPrepareMode(event.target.value === 'manual' ? 'manual' : 'assisted')
+                  }
+                >
+                  <option value="assisted">Assisted (revisión humana)</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <button type="button" disabled={busy} onClick={() => void prepare(item.match.id)}>
+                Preparar candidatura
+              </button>
+            </div>
+            <p className="muted">
+              Fase 4: documentos y claims verificados. El formulario real se inspecciona en Fase 5
+              (AUTO no disponible).
+            </p>
           </div>
         ))}
 

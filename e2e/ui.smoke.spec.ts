@@ -97,3 +97,58 @@ test('ranks matches by score and explains them without an LLM', async ({ page })
   await expect(page.getByRole('heading', { name: 'Razones' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Selección de CV' })).toBeVisible();
 });
+
+test('prepares a Phase 4 application from a match (documents, claims, provenance, timeline)', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await login(page);
+
+  // Structured facts make the tailored resume variant assert a verifiable
+  // general-years claim (same API the UI consumes, cookie-authenticated).
+  const skillResponse = await page.request.post('/v1/profile/skills', {
+    data: { skillName: 'React', level: 'expert', years: 5 },
+  });
+  expect(skillResponse.ok()).toBeTruthy();
+  const experienceResponse = await page.request.post('/v1/profile/experiences', {
+    data: {
+      company: 'Acme Corp',
+      title: 'Senior Developer',
+      startDate: '2018-01-01',
+      endDate: '2024-01-01',
+      description: 'Built internal tools',
+      skills: ['React'],
+    },
+  });
+  expect(experienceResponse.ok()).toBeTruthy();
+
+  await page.goto('/matches');
+  const row = page.getByRole('row', { name: /Senior React Developer/ });
+  await expect(row).toBeVisible({ timeout: 45_000 });
+  await row.getByRole('button', { name: 'Detalle' }).click();
+  await page.getByRole('button', { name: 'Preparar candidatura' }).click();
+
+  // Redirects to the application detail (SHORTLISTED until documents are prepared).
+  await expect(page).toHaveURL(/\/applications\/[0-9a-f-]{36}$/, { timeout: 30_000 });
+  await expect(page.getByText(/Preseleccionada|Preparando/)).toBeVisible();
+  await expect(page.getByText('preparationSnapshot: pendiente')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Preparar documentos' }).click();
+  await expect(page.getByText('Documentos listos · Formulario pendiente de inspección')).toBeVisible({
+    timeout: 45_000,
+  });
+
+  // Documents, deterministic provenance, verified claims and sourceRefs.
+  await expect(page.getByRole('heading', { name: 'Variante de CV' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Cover letter' })).toBeVisible();
+  await expect(page.getByText('verificada').first()).toBeVisible();
+  await expect(page.getByText(/experience ·/).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Origen' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Timeline' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'application.documents_prepared' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'SHORTLISTED → PREPARING' })).toBeVisible();
+
+  // Phase 4 never claims the application is ready to submit.
+  await expect(page.getByText('Listo para enviar')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Enviar|Submit/i })).toHaveCount(0);
+});
