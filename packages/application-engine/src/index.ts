@@ -1,7 +1,11 @@
 /**
- * Placeholder package (application-engine:phase-4).
- * Exists in Phase 1 to fix the approved repository layout and dependency
- * boundaries; functionality lands in its roadmap phase (docs/roadmap).
+ * `application-engine`: candidature lifecycle orchestration (Phase 4).
+ * Pure domain orchestration: state machine, guards, idempotency and document
+ * preparation flow over injected ports (repository, documents, storage, clock).
+ * It never imports database/ai/apps (architecture doc 11 §3).
  */
-export const PACKAGE_PHASE = "application-engine:phase-4" as const;
-
+export * from './engine.js';
+export * from './idempotency.js';
+export * from './policy.js';
+export * from './ports.js';
+export * from './state-machine.js';
