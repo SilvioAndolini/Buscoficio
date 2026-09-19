@@ -118,6 +118,7 @@ export function prepareResumeVariant(input: ResumeVariantInput): ResumeVariantDr
       model: 'template-v1',
       promptVersion: 'resume-variant/v1',
       inputHash,
+      asOfDate: asOfDate === null ? null : asOfDate.toISOString().slice(0, 10),
     },
     sourceResumeVersionId: sourceResumeVersion.id,
     highlights: {

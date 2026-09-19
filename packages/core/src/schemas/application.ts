@@ -161,6 +161,15 @@ export const GeneratedBySchema = z.object({
   model: nonEmptyString.max(120),
   promptVersion: nonEmptyString.max(80),
   inputHash: z.string().length(64),
+  /**
+   * Temporal anchor used to render/evaluate open-ended experience (Phase 4.1).
+   * Null/absent when every experience range is closed (time-independent).
+   */
+  asOfDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'asOfDate must be YYYY-MM-DD')
+    .nullable()
+    .optional(),
 });
 export type GeneratedBy = z.infer<typeof GeneratedBySchema>;
 

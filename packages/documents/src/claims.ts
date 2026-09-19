@@ -13,6 +13,7 @@ import {
   type VerificationResult,
   type VerificationStatus,
 } from '@job-system/core';
+import { asFiniteNumber, asRecord, asString } from './value.js';
 
 /**
  * Deterministic factual authority (architecture docs 03 §8, 08 §5).
@@ -22,20 +23,6 @@ import {
  */
 
 const MONTH_MS = 1000 * 60 * 60 * 24 * 30.4375;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
 
 function normalizeFact(value: string): string {
   return normalizeForDedup(value)
@@ -120,7 +107,7 @@ function findSkill(facts: ProfileFactsView, name: string): FactSkill | null {
 function validateYearsExperience(
   value: unknown,
   facts: ProfileFactsView,
-  asOfDate: Date,
+  asOfDate: Date | null,
 ): KindResult {
   const record = asRecord(value);
   const years = record === null ? null : asFiniteNumber(record['years']);
@@ -309,7 +296,7 @@ function validateSalary(value: unknown, facts: ProfileFactsView): KindResult {
   };
 }
 
-function validateClaim(claim: Claim, facts: ProfileFactsView, asOfDate: Date): KindResult {
+function validateClaim(claim: Claim, facts: ProfileFactsView, asOfDate: Date | null): KindResult {
   switch (claim.kind) {
     case 'years_experience':
       return validateYearsExperience(claim.value, facts, asOfDate);
@@ -337,7 +324,7 @@ function validateClaim(claim: Claim, facts: ProfileFactsView, asOfDate: Date): K
 export function validateClaims(
   claims: Claim[],
   facts: ProfileFactsView,
-  options: { asOfDate: Date },
+  options: { asOfDate: Date | null },
 ): ClaimValidation {
   const validated: Claim[] = [];
   const failures: ClaimFailure[] = [];

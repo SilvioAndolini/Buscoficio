@@ -129,7 +129,7 @@ export class OpenAiCompatibleTextProvider implements TextGenerationPort {
     } catch (error) {
       throw new AiError(`${this.provider} returned invalid JSON for structured output`, {
         retryable: true,
-        context: { schemaName: request.schemaName },
+        context: { schemaName: request.schemaName, invalidOutput: true },
         cause: error,
       });
     }
@@ -139,6 +139,7 @@ export class OpenAiCompatibleTextProvider implements TextGenerationPort {
         retryable: false,
         context: {
           schemaName: request.schemaName,
+          invalidOutput: true,
           issues: parsed.error.issues.map((issue) => issue.path.join('.')),
         },
       });

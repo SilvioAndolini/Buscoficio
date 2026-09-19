@@ -108,9 +108,12 @@ export interface MatchCreationContext {
   overallScore: number;
   isCurrent: boolean;
   recommendedResumeId: string | null;
+  /**
+   * Exact version the match used for its recommendation. `null` means the
+   * match is legacy/incomplete: creation must fail closed instead of silently
+   * substituting the current latest version (Phase 4.1, P4).
+   */
   recommendedResumeVersionId: string | null;
-  /** Latest version of the recommended resume (explicit fallback evidence). */
-  recommendedResumeLatestVersionId: string | null;
   job: JobDocumentView & {
     status: string;
     applicationTargetId: string | null;

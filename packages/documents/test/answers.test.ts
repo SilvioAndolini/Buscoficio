@@ -74,4 +74,37 @@ describe('answer bank resolution (Phase 4)', () => {
     expect(result.requiresHumanInput).toBe(true);
     expect(result.verification.status).toBe('rejected');
   });
+
+  it('fail closed: an unverifiable answer is never reused automatically (P2)', () => {
+    const seniorityClaim: Claim = {
+      claim: 'seniority: senior',
+      kind: 'seniority',
+      value: { level: 'senior' },
+      sourceRefs: [],
+      verified: 'unverifiable',
+    };
+    const result = resolveAnswer({
+      questionText: 'What is your seniority level?',
+      priorApproved: priorAnswer([seniorityClaim]),
+      facts: buildFacts(),
+      asOfDate,
+    });
+    expect(result.action).toBe('stale');
+    if (result.action !== 'stale') throw new Error('unreachable');
+    expect(result.requiresHumanInput).toBe(true);
+    expect(result.verification.status).toBe('unverifiable');
+  });
+
+  it('reuses an answer without factual claims (verified vacuously)', () => {
+    const result = resolveAnswer({
+      questionText: 'When could you start?',
+      priorApproved: priorAnswer([]),
+      facts: buildFacts(),
+      asOfDate,
+    });
+    expect(result.action).toBe('reuse');
+    if (result.action !== 'reuse') throw new Error('unreachable');
+    expect(result.verification.status).toBe('verified');
+    expect(result.requiresHumanInput).toBe(false);
+  });
 });

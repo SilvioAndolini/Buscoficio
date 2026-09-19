@@ -1,7 +1,7 @@
 export {
   COVER_LETTER_PROMPT_VERSION,
-  buildCoverLetterPromptV1,
-} from './cover-letter/v1.js';
+  buildCoverLetterPromptV2,
+} from './cover-letter/v2.js';
 export {
   RESUME_VARIANT_PROMPT_VERSION,
   buildResumeVariantPromptV1,

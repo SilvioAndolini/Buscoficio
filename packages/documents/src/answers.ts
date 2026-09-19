@@ -2,9 +2,9 @@ import type { Claim, ResolveAnswerInput, ResolveAnswerResult } from '@job-system
 import { validateClaims } from './claims.js';
 
 /**
- * Answer bank resolution (task §69–§73): an approved answer is reused only
- * after its claims/sourceRefs are revalidated against the current profile.
- * A stale answer is never reused blindly; generated content is never trusted.
+ * Answer bank resolution (task §15): ONLY a fully verified answer may be
+ * reused automatically. `unverifiable` and `rejected` both fail closed into
+ * human review (Phase 4.1, P2); stale answers are never reused blindly.
  */
 export function resolveAnswer(input: ResolveAnswerInput): ResolveAnswerResult {
   const prior = input.priorApproved;
@@ -13,7 +13,7 @@ export function resolveAnswer(input: ResolveAnswerInput): ResolveAnswerResult {
   }
   const validation = validateClaims(prior.claims, input.facts, { asOfDate: input.asOfDate });
   const sourceRefs = validation.claims.flatMap((claim: Claim) => claim.sourceRefs);
-  if (validation.verification.status === 'rejected') {
+  if (validation.verification.status !== 'verified') {
     return {
       action: 'stale',
       answerText: prior.answerText,

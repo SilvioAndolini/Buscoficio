@@ -1,7 +1,9 @@
 import type {
   Claim,
+  ClaimFailure,
   ClaimValidation,
   CoverLetterDraft,
+  GeneratedBy,
   JobDocumentView,
   ResumeVariantDraft,
   SourceRef,
@@ -29,7 +31,8 @@ export interface ResumeVariantInput {
   job: JobDocumentView;
   facts: ProfileFactsView;
   sourceResumeVersion: SourceResumeVersionView;
-  asOfDate: Date;
+  /** Explicit temporal anchor; null when every experience range is closed. */
+  asOfDate: Date | null;
   /** Preparation identity; persisted inside generatedBy (provenance). */
   inputHash: string;
 }
@@ -47,7 +50,8 @@ export type CoverLetterPromptBuilder = (context: CoverLetterPromptContext) => Pr
 export interface CoverLetterInput {
   job: JobDocumentView;
   facts: ProfileFactsView;
-  asOfDate: Date;
+  /** Explicit temporal anchor; null when every experience range is closed. */
+  asOfDate: Date | null;
   buildPrompt: CoverLetterPromptBuilder;
   inputHash: string;
   trace: TraceContext;
@@ -66,7 +70,8 @@ export interface ResolveAnswerInput {
     verification: VerificationResult;
   } | null;
   facts: ProfileFactsView;
-  asOfDate: Date;
+  /** Explicit temporal anchor; null when every experience range is closed. */
+  asOfDate: Date | null;
 }
 
 export type ResolveAnswerResult =
@@ -80,6 +85,17 @@ export type ResolveAnswerResult =
     }
   | { action: 'requires_human'; reason: string };
 
+/**
+ * Claim-complete cover letter preparation (Phase 4.1, P1). The final text is
+ * deterministically rendered from validated claims; the model only selects and
+ * structures them. `requires_human` means no factually safe document could be
+ * produced (rejected claims after the single repair, or invalid structured
+ * output): the engine raises REQUIRES_HUMAN_ACTION and nothing is persisted.
+ */
+export type CoverLetterPreparation =
+  | { kind: 'draft'; draft: CoverLetterDraft }
+  | { kind: 'requires_human'; reason: string; failures: ClaimFailure[]; generatedBy: GeneratedBy };
+
 export interface DocumentsPort {
   /** Provider/model actually used for text generation (provenance + hash). */
   readonly provider: string;
@@ -92,7 +108,7 @@ export interface DocumentsPort {
   validateClaims(
     claims: Claim[],
     facts: ProfileFactsView,
-    options: { asOfDate: Date },
+    options: { asOfDate: Date | null },
   ): ClaimValidation;
 
   /** PII-minimized facts view; salary only when explicitly requested. */
@@ -107,8 +123,8 @@ export interface DocumentsPort {
   /** Deterministic tailored resume variant (reorder/select/summarize only). */
   prepareResumeVariant(input: ResumeVariantInput): ResumeVariantDraft;
 
-  /** Cover letter via TextGenerationPort + deterministic validation + max 1 repair. */
-  prepareCoverLetter(input: CoverLetterInput): Promise<CoverLetterDraft>;
+  /** Cover letter: structured claim selection + deterministic rendering + max 1 repair. */
+  prepareCoverLetter(input: CoverLetterInput): Promise<CoverLetterPreparation>;
 
   /** Answer bank: revalidate an approved answer against current facts. */
   resolveAnswer(input: ResolveAnswerInput): ResolveAnswerResult;

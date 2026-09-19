@@ -22,7 +22,9 @@ export interface MockTextGenerationProviderOptions {
 }
 
 const DEFAULT_COVER_LETTER = {
-  text: 'Dear hiring team,\n\nI am writing to apply for this position and would welcome the opportunity to discuss how my background fits your team.\n\nSincerely,',
+  tone: 'direct',
+  opening: 'direct',
+  closing: 'thanks',
   claims: [],
 };
 
@@ -107,7 +109,7 @@ export class MockTextGenerationProvider implements TextGenerationPort {
       const parsed = request.schema.safeParse(fallback);
       if (!parsed.success) {
         throw new AiError('MockTextGenerationProvider: default response failed schema validation', {
-          context: { schemaName: request.schemaName },
+          context: { schemaName: request.schemaName, invalidOutput: true },
         });
       }
       return {
@@ -121,11 +123,13 @@ export class MockTextGenerationProvider implements TextGenerationPort {
         const parsed = request.schema.safeParse(response.value);
         if (!parsed.success) {
           throw new AiError('MockTextGenerationProvider: response failed schema validation', {
-            context: { schemaName: request.schemaName },
+            context: { schemaName: request.schemaName, invalidOutput: true },
           });
         }
         if (response.kind === 'invalid-schema') {
-          throw new AiError('MockTextGenerationProvider: scripted schema-invalid output');
+          throw new AiError('MockTextGenerationProvider: scripted schema-invalid output', {
+            context: { schemaName: request.schemaName, invalidOutput: true },
+          });
         }
         return {
           ...this.baseResult(request, JSON.stringify(parsed.data)),

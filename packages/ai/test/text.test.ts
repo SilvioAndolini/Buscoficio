@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { AiError } from '@job-system/core';
 import { ConfigError } from '@job-system/shared';
 import { MockTextGenerationProvider } from '../src/text/mock-provider.js';
 import { OpenAiCompatibleTextProvider } from '../src/text/openai-provider.js';
 import { AnthropicTextProvider } from '../src/text/anthropic-provider.js';
 import { createTextGenerationProvider } from '../src/text/index.js';
 
-const schema = z.object({ text: z.string(), claims: z.array(z.unknown()) });
+const schema = z.object({
+  tone: z.string(),
+  opening: z.string(),
+  closing: z.string(),
+  claims: z.array(z.unknown()),
+});
+/** Provider-level contract tests are schema-agnostic; use a minimal shape. */
+const textSchema = z.object({ text: z.string() });
 const request = {
   system: 'system',
   user: 'user',
-  promptVersion: 'cover-letter/v1',
+  promptVersion: 'cover-letter/v2',
   inputHash: 'h'.repeat(64),
   trace: { correlationId: 'ai-test' },
 };
@@ -24,20 +30,20 @@ describe('MockTextGenerationProvider (Phase 4)', () => {
       schema,
       schemaName: 'cover_letter',
     });
-    expect(result.value.text.length).toBeGreaterThan(0);
+    expect(result.value.tone).toBe('direct');
     expect(result.value.claims).toEqual([]);
     expect(provider.calls).toEqual([
-      { promptVersion: 'cover-letter/v1', inputHash: 'h'.repeat(64), schemaName: 'cover_letter' },
+      { promptVersion: 'cover-letter/v2', inputHash: 'h'.repeat(64), schemaName: 'cover_letter' },
     ]);
   });
 
   it('simulates schema-invalid output and provider errors/timeouts', async () => {
     const invalid = new MockTextGenerationProvider({
-      responses: [{ kind: 'invalid-schema', value: { text: 1, claims: [] } }],
+      responses: [{ kind: 'invalid-schema', value: { tone: 1 } }],
     });
     await expect(
       invalid.completeStructured({ ...request, schema, schemaName: 'cover_letter' }),
-    ).rejects.toBeInstanceOf(AiError);
+    ).rejects.toMatchObject({ context: { invalidOutput: true } });
 
     const error = new MockTextGenerationProvider({ responses: [{ kind: 'error', retryable: true }] });
     await expect(
@@ -56,15 +62,17 @@ describe('MockTextGenerationProvider (Phase 4)', () => {
         {
           kind: 'structured',
           value: {
-            text: 'Invented',
-            claims: [{ claim: '10 years AWS', kind: 'years_experience', value: { years: 10 } }],
+            tone: 'direct',
+            opening: 'direct',
+            closing: 'thanks',
+            claims: [{ kind: 'years_experience', value: { years: 10, skill: 'AWS' } }],
           },
         },
-        { kind: 'structured', value: { text: 'Valid', claims: [] } },
+        { kind: 'structured', value: { tone: 'warm', opening: 'values', closing: 'available', claims: [] } },
       ],
     });
     const first = await provider.completeStructured({ ...request, schema, schemaName: 'cover_letter' });
-    expect((first.value.claims[0] as { claim: string }).claim).toBe('10 years AWS');
+    expect((first.value.claims[0] as { kind: string }).kind).toBe('years_experience');
     const second = await provider.completeStructured({ ...request, schema, schemaName: 'cover_letter' });
     expect(second.value.claims).toEqual([]);
     expect(provider.calls).toHaveLength(2);
@@ -137,7 +145,7 @@ describe('OpenAiCompatibleTextProvider contract (fake HTTP)', () => {
       baseUrl: 'https://api.openai.com/v1',
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const result = await provider.completeStructured({ ...request, schema, schemaName: 'cover_letter' });
+    const result = await provider.completeStructured({ ...request, schema: textSchema, schemaName: 'cover_letter' });
     expect(result.value.text).toBe('ok');
     expect(result.tokensIn).toBe(12);
     expect(result.tokensOut).toBe(7);
@@ -181,8 +189,8 @@ describe('OpenAiCompatibleTextProvider contract (fake HTTP)', () => {
         })) as unknown as typeof fetch,
     });
     await expect(
-      invalid.completeStructured({ ...request, schema, schemaName: 'cover_letter' }),
-    ).rejects.toBeInstanceOf(AiError);
+      invalid.completeStructured({ ...request, schema: textSchema, schemaName: 'cover_letter' }),
+    ).rejects.toMatchObject({ context: { invalidOutput: true } });
 
     const timeout = new OpenAiCompatibleTextProvider({
       provider: 'openai',
@@ -213,7 +221,7 @@ describe('AnthropicTextProvider contract (fake HTTP)', () => {
       model: 'claude-3-5-sonnet',
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const result = await provider.completeStructured({ ...request, schema, schemaName: 'cover_letter' });
+    const result = await provider.completeStructured({ ...request, schema: textSchema, schemaName: 'cover_letter' });
     expect(result.value.text).toBe('ok');
     const [url, init] = fetchImpl.mock.calls[0]! as unknown as [string, RequestInit];
     expect(url).toBe('https://api.anthropic.com/v1/messages');

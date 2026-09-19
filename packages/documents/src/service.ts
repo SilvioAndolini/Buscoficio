@@ -1,8 +1,8 @@
 import type {
   Claim,
   ClaimValidation,
-  CoverLetterDraft,
   CoverLetterInput,
+  CoverLetterPreparation,
   DocumentsPort,
   ProfileFactsSource,
   ProfileFactsView,
@@ -32,7 +32,11 @@ export function createDocumentsService(deps: DocumentsServiceDeps): DocumentsPor
   return {
     provider: deps.textProvider.provider,
     model: deps.textProvider.model,
-    validateClaims(claims: Claim[], facts: ProfileFactsView, options: { asOfDate: Date }): ClaimValidation {
+    validateClaims(
+      claims: Claim[],
+      facts: ProfileFactsView,
+      options: { asOfDate: Date | null },
+    ): ClaimValidation {
       return validateClaims(claims, facts, options);
     },
     buildProfileFactsView(source: ProfileFactsSource, options?: { includeSalary?: boolean }): ProfileFactsView {
@@ -42,7 +46,7 @@ export function createDocumentsService(deps: DocumentsServiceDeps): DocumentsPor
     prepareResumeVariant(input: ResumeVariantInput): ResumeVariantDraft {
       return prepareResumeVariant(input);
     },
-    prepareCoverLetter(input: CoverLetterInput): Promise<CoverLetterDraft> {
+    prepareCoverLetter(input: CoverLetterInput): Promise<CoverLetterPreparation> {
       return prepareCoverLetter(deps.textProvider, input);
     },
     resolveAnswer(input: ResolveAnswerInput): ResolveAnswerResult {

@@ -6,7 +6,7 @@ import {
   type CreateApplicationCommand,
 } from '@job-system/application-engine';
 import { createTextGenerationProvider } from '@job-system/ai';
-import { buildCoverLetterPromptV1 } from '@job-system/ai/prompts';
+import { buildCoverLetterPromptV2 } from '@job-system/ai/prompts';
 import { createDocumentsService } from '@job-system/documents';
 import {
   resolveTextRuntime,
@@ -141,7 +141,7 @@ export function createApplicationService(deps: ApplicationServiceDeps): Applicat
     engine,
     createFromMatch: (command, trace) => engine.createFromMatch(command, trace),
     prepare: (applicationId, trace) =>
-      engine.prepareDocuments(applicationId, { buildCoverLetterPrompt: buildCoverLetterPromptV1 }, trace),
+      engine.prepareDocuments(applicationId, { buildCoverLetterPrompt: buildCoverLetterPromptV2 }, trace),
     resolveQuestion: (applicationId, questionText, trace) =>
       engine.resolveQuestion(applicationId, { questionText }, trace),
     resolveHumanAction: (applicationId, reason, trace) =>

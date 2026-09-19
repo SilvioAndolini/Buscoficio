@@ -117,7 +117,7 @@ export class AnthropicTextProvider implements TextGenerationPort {
     if (jsonStart === -1 || jsonEnd <= jsonStart) {
       throw new AiError('anthropic structured output did not contain a JSON object', {
         retryable: true,
-        context: { schemaName: request.schemaName },
+        context: { schemaName: request.schemaName, invalidOutput: true },
       });
     }
     let raw: unknown;
@@ -126,7 +126,7 @@ export class AnthropicTextProvider implements TextGenerationPort {
     } catch (error) {
       throw new AiError('anthropic returned invalid JSON for structured output', {
         retryable: true,
-        context: { schemaName: request.schemaName },
+        context: { schemaName: request.schemaName, invalidOutput: true },
         cause: error,
       });
     }
@@ -136,6 +136,7 @@ export class AnthropicTextProvider implements TextGenerationPort {
         retryable: false,
         context: {
           schemaName: request.schemaName,
+          invalidOutput: true,
           issues: parsed.error.issues.map((issue) => issue.path.join('.')),
         },
       });

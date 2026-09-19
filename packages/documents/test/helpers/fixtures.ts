@@ -103,7 +103,7 @@ export function buildScriptedProvider(script: ScriptedResponse[]): TextGeneratio
       const parsed = request.schema.safeParse(next.value);
       if (!parsed.success) {
         throw new AiError('scripted structured output failed schema validation', {
-          context: { schemaName: request.schemaName },
+          context: { schemaName: request.schemaName, invalidOutput: true },
         });
       }
       return {
