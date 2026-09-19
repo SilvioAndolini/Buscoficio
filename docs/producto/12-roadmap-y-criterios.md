@@ -129,12 +129,34 @@ Entregables:
 - UI de revisión de documentos y claims.
 
 Criterios de aceptación:
-- [ ] Imposible crear dos candidaturas activas al mismo Job canónico (test de constraint).
-- [ ] Reaplicar tras `REJECTED` exige `supersedes` + confirmación + cooldown.
-- [ ] Claim cuantitativo no computable desde el perfil es rechazado (p. ej. “5 años con React” sin `candidate_skill.years`).
-- [ ] Claim categórico sin entidad de respaldo es rechazado.
-- [ ] Documentos versionados; CV original intacto (hash).
-- [ ] Timeline visible con eventos y procedencia de cada respuesta.
+- [x] Imposible crear dos candidaturas activas al mismo Job canónico (test de constraint). *(partial unique probado con SQL directo)*
+- [x] Reaplicar tras `REJECTED` exige `supersedes` + confirmación + cooldown. *(unit engine + integración)*
+- [x] Claim cuantitativo no computable desde el perfil es rechazado (p. ej. “5 años con React” sin `candidate_skill.years`). *(fixtures del validador)*
+- [x] Claim categórico sin entidad de respaldo es rechazado. *(certification/project ⇒ rejected; company/degree/title inventados)*
+- [x] Documentos versionados; CV original intacto (hash). *(test de hash original + variante nueva `kind=tailored`)*
+- [x] Timeline visible con eventos y procedencia de cada respuesta. *(UI detalle + sourceRefs visibles)*
+
+**Fase 4 — Application Preparation implementada y verificada (2026-09-18):** agregado `application`
+(`idempotency_key` UNIQUE + partial unique activa A1 + FK RESTRICT), `application_answer`
+(UNIQUE por `question_hash`), `application_document` (append-only por `(application_id, kind,
+content_hash)` + índice `generated_by->>'inputHash'`), `application_event` append-only con
+transición atómica (compare-and-set) y migración `0009`. State machine completa en
+`packages/application-engine` (Phase 4 sólo ejecuta DISCOVERED→…→PREPARING/REQUIRES_HUMAN_ACTION/
+ARCHIVED; `PREPARING→READY_FOR_REVIEW` denegada sin snapshot, `preparationSnapshot` siempre NULL).
+`packages/documents` implementa `ProfileFactsView` sin PII, hashing canónico de preguntas, validador
+determinista de claims por kind (sourceRefs autoritativos), variante de CV determinista, cover
+letter vía `TextGenerationPort` con **una** reparación factual y degradación a plantilla, y banco
+de respuestas con revalidación (stale ⇒ no reutilizar). `packages/ai` añade
+`TextGenerationPort` (mock scripted + OpenAI-compatible + Anthropic), prompts versionados con
+contenido externo delimitado y `MockDecisionProvider` (Jev queda para Fase 5). Cola `documents`
+(`prepare-<applicationId>`, lock advisory por aplicación, idempotencia por inputHash), API
+`/v1/applications` (create idempotente, prepare 202, answers + resolve, resolve-human, archive; sin
+submit/reconcile) y UI `/applications` + detalle con claims/provenance/timeline. `AI_PROVIDER`
+independiente de `EMBEDDING_PROVIDER`; `APPLICATION_PREPARATION_POLICY_VERSION` +
+`REAPPLICATION_COOLDOWN_DAYS` (default 30) forman la política versionada. Evidencia: unit
+engine/documents/ai, integración Postgres (constraints, concurrencia, lock, respuestas), worker
+(match→application→prepare, CV original intacto, reparación ok/fallida, concurrencia), E2E API
+(create/prepare/answers/archive, `mode=auto` 422, submit 404) y Playwright 4/4.
 
 ## Fase 5 — Browser Automation
 

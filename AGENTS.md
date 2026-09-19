@@ -52,4 +52,17 @@ requisitos duros con cap y explicación, identidad completa de `JobMatch` (`iden
 `EMBEDDING_PROVIDER` independiente de `AI_PROVIDER`, cola `match` desacoplada del discovery y UI
 `/matches`. `EmbeddingProvider` se inyecta desde `packages/ai` (`EMBEDDING_PROVIDER=mock` por
 defecto; jamás un LLM decide score/CV/requisitos). Detalles en `docs/plans/phase-3-matching.md`.
-Próxima: Fase 4 (application preparation).
+
+**Fase 4 (Application Preparation) completada**: `packages/application-engine` (state machine
+completa con guardas, idempotencia de candidatura, reaplicación con `supersedes` + cooldown,
+orquestación `createFromMatch`/`prepareDocuments`/`resolveQuestion`/`resolveHumanAction`/`archive`)
+y `packages/documents` (ProfileFactsView sin PII, validador determinista de claims con
+`sourceRefs`, variante de CV determinista, cover letter vía `TextGenerationPort` con una única
+reparación factual, banco de respuestas revalidado). Migración `0009`: `application` (+ partial
+unique activa), `application_answer`, `application_document` (append-only), `application_event`
+(transición atómica). `packages/ai` añade TextGeneration (mock/OpenAI-compatible/Anthropic) y
+prompts versionados; Jev/DecisionProvider queda como infraestructura (piloto en Fase 5). La
+candidatura permanece en `PREPARING` con `preparationSnapshot = NULL`: `READY_FOR_REVIEW` exige
+`SubmissionPort` (Fase 5) y está denegada por la state machine. Sin browser automation, sin submit,
+sin ledger, sin AUTO. Detalles en `docs/plans/phase-4-application-preparation.md`.
+Próxima: Fase 5 (browser automation + SubmissionPort).
