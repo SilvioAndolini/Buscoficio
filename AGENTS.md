@@ -53,7 +53,7 @@ requisitos duros con cap y explicación, identidad completa de `JobMatch` (`iden
 `/matches`. `EmbeddingProvider` se inyecta desde `packages/ai` (`EMBEDDING_PROVIDER=mock` por
 defecto; jamás un LLM decide score/CV/requisitos). Detalles en `docs/plans/phase-3-matching.md`.
 
-**Fase 4 (Application Preparation) completada + Fase 4.1 (saneamiento)**: `packages/application-engine`
+**Fase 4 (Application Preparation) completada + Fase 4.1/4.2 (saneamiento)**: `packages/application-engine`
 (state machine completa con guardas, idempotencia de candidatura, reaplicación con `supersedes` +
 cooldown, orquestación `createFromMatch`/`prepareDocuments`/`resolveQuestion`/`resolveHumanAction`/
 `archive`, y `derivePreparationBlockers` puro compartido con la API) y `packages/documents`
@@ -62,13 +62,17 @@ determinista, cover letter con **claim completeness**: el modelo devuelve un pla
 texto final se renderiza determinísticamente —sin canal de texto libre—, banco de respuestas
 revalidado). Migración `0009`: `application` (+ partial unique activa), `application_answer`,
 `application_document` (append-only), `application_event` (transición atómica); `0010`: defaults
-JSONB de arrays (`[]`) + normalización idempotente de `{}` legacy. `packages/ai` añade
-TextGeneration (mock/OpenAI-compatible/Anthropic) y prompts versionados; Jev/DecisionProvider queda
-como infraestructura (piloto en Fase 5). Sólo `verification.status === 'verified'` habilita reuse
-automático (`unverifiable` y `rejected` ⇒ revisión humana). El CV usado es exactamente el
+JSONB de arrays (`[]`) + normalización idempotente de `{}` legacy; `0011`: saneamiento de respuestas
+claimless legacy. `packages/ai` añade TextGeneration (mock/OpenAI-compatible/Anthropic) y prompts
+versionados; Jev/DecisionProvider queda como infraestructura (piloto en Fase 5). Sólo
+`verification.status === 'verified'` habilita reuse automático (`unverifiable` y `rejected` ⇒
+revisión humana); además, **una respuesta de texto libre sin claims (`claims=[]`) es siempre
+`unverifiable`/human-only** vía `validateAnswerContent` (API y banco aplican la misma política,
+nunca se confía en flags legacy), porque la ausencia de claims no puede evitar la validación
+factual. El CV usado es exactamente el
 `recommendedResumeVersionId` del JobMatch (sin fallback a la última versión); la identidad de
 preparación incluye `preparationAsOfDate` cuando hay experiencias abiertas. La candidatura
 permanece en `PREPARING` con `preparationSnapshot = NULL`: `READY_FOR_REVIEW` exige `SubmissionPort`
 (Fase 5) y está denegada por la state machine. Sin browser automation, sin submit, sin ledger, sin
-AUTO. Detalles en `docs/plans/phase-4-application-preparation.md`.
+AUTO. Detalles en `docs/plans/phase-4-application-preparation.md` (§19–20).
 Próxima: Fase 5 (browser automation + SubmissionPort).

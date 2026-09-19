@@ -174,6 +174,20 @@ versión, `recommendedResumeId` sin versión ⇒ `ConflictError`, se elimina
 Postgres (0010 + histórico), worker (temporal, CV exacto, banco no verificado, replay de
 blockers), E2E API (respuesta no verificada bloqueada) y Playwright.
 
+**Fase 4.2 — respuestas claimless saneadas (2026-09-19):** última vía factual cerrada:
+`validateClaims([])` (verified vacío) ya no aplica a texto libre. `validateAnswerContent` en
+`packages/documents` (expuesta en `DocumentsPort`, consumida por API y banco de respuestas) marca
+toda respuesta con `claims.length === 0` como `unverifiable` + `requiresHumanInput` +
+`automaticReuseAllowed=false` (con `VerificationResult.reason` opcional), sin heurísticas ni LLM.
+La API nunca la aprueba aunque el cliente envíe `approved=true`; `resolveAnswer` nunca la reutiliza
+(incluidas filas legacy `approved=true`/`verified`, que además sanea la migración forward-only
+`0011_claimless_answer_sanitation.sql` sin tocar respuestas con claims). La UI muestra
+`Needs review` + razón. Decisión deliberadamente conservadora: Fase 5 introducirá
+`QuestionDescriptor`/`semanticType` para permitir claimless sólo en categorías no factuales
+tipadas. Evidencia: unit documents (AWS inventado, benigno, claim válida, claim inválida), engine
+(blocker explícito), integración Postgres (0010→0011 + histórico), worker (banco legacy claimless),
+E2E API (PUT claimless bloqueada + resolve sin reuse) y Playwright.
+
 ## Fase 5 — Browser Automation
 
 **Objetivo:** preparación completa y envío simulado (`DRY_RUN`) sobre fake-ATS y 1–2 targets permitidos.

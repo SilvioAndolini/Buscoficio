@@ -393,3 +393,65 @@ UPDATE ... SET ... = '[]'::jsonb WHERE ... = '{}'::jsonb;  -- legacy, idempotent
 Sólo normaliza objetos vacíos; arrays válidos intactos; `verification`/`payload` siguen siendo
 objetos. Drizzle usa el mismo default `[]` para que fresh y upgraded no diverjan. Tests: fresh
 (defaults `[]`), upgrade 0009→0010 con fila legacy `{}` normalizada e histórico intacto.
+
+## 20. Fase 4.2 — saneamiento de respuestas claimless (pre-Fase 5)
+
+Último blocker factual detectado tras 4.1: `validateClaims([])` devuelve `verified` vacío. Para
+documentos estructurados es legítimo, pero para **texto libre de respuesta** permitía que un hecho
+inventado (“I have 10 years of AWS experience and I am AWS Certified.”) con `claims=[]` quedara
+`verified`, `approved`, reusable y `requiresHumanInput=false`. La ausencia de claims nunca puede
+ser una vía para evitar la validación factual.
+
+### Política
+
+Determinista y fail-closed (sin heurísticas, sin NLP, sin LLM que extraiga hechos):
+
+```
+claims.length === 0
+  → verification.status = unverifiable
+  → requiresHumanInput = true
+  → automaticReuseAllowed = false
+
+claims.length > 0
+  → validateClaims() (autoridad de siempre)
+  → verified ⇒ aprobable/reusable; unverifiable|rejected ⇒ revisión humana
+```
+
+`validateAnswerContent({answerText, claims, facts, asOfDate})` vive en `packages/documents`
+(`answer-content.ts`), se expone en `DocumentsPort` y la consumen la API (`PUT .../answers`) y el
+banco de respuestas (`resolveAnswer`), de modo que API y engine aplican exactamente la misma
+política. `validateClaims([])` no se modifica: sigue siendo válido para documentos estructurados.
+
+La decisión es deliberadamente conservadora: Fase 4 no conoce todavía la semántica del
+formulario/campo real, así que incluso un texto aparentemente no factual (“I would be happy to
+discuss this further.”) queda en revisión humana. Fase 5 introducirá `QuestionDescriptor`/
+`semanticType` + reglas y DecisionProvider/Jev para permitir claimless sólo en categorías
+explícitamente no factuales (p. ej. consentimiento, disponibilidad, preferencia). Prioridad:
+integridad factual > comodidad de reuse automático.
+
+### Cambios
+
+- `VerificationResult` gana `reason?` opcional (compatible con histórico) para explicar un estado
+  que no proviene de un fallo por claim. Claimless:
+  `“Free-text answer contains no structured claims/evidence and cannot be automatically verified in Phase 4.”`
+- `PUT /v1/applications/:id/answers`: `requiresHumanInput = validation.requiresHumanInput`,
+  `approved = body.approved && validation.automaticReuseAllowed`. La respuesta se sigue almacenando
+  (`answerText` intacto, `sourceRefs=[]`, sin provenance inventada) para revisión posterior.
+- `resolveAnswer`: reuse exige `approved` previo + `claims.length > 0` + revalidación `verified`;
+  una respuesta claimless (incluidas filas legacy con `approved=true`/`verification=verified`) es
+  `stale` y nunca se confía en los flags históricos.
+- Blockers: una respuesta claimless tiene `requiresHumanInput=true` ⇒ blocker `stale_answer` con el
+  texto de la pregunta (“Answer requires human input: …”), visible en el detalle de la aplicación.
+- UI `/applications/:id`: `Verified` sólo si `verification.status === 'verified'` y hay claims; en
+  caso contrario `Needs review` + `reason`.
+
+### Migración 0011
+
+`0011_claimless_answer_sanitation.sql` (forward-only; 0000–0010 intactas): para filas con
+`claims = []` que estén `approved = true` o con `verification->>'status' = 'verified'`, fija
+`approved=false`, `requires_human_input=true` y `verification = {status:'unverifiable', failures:[],
+reason:'Claimless free-text answer requires human review under Phase 4.2 policy.'}`. Las respuestas
+con `jsonb_array_length(claims) > 0` no se tocan. Idempotente: tras la primera ejecución ninguna
+fila vuelve a cumplir la condición. No se añade CHECK de BD (la política está centralizada en
+`documents`; la migración sólo sanea el histórico).
+
