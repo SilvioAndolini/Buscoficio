@@ -221,22 +221,11 @@ describe('application engine — preparation flow (Phase 4)', () => {
     const { engine, state } = setup({
       documents: {
         prepareCoverLetter: async (input) => ({
-          kind: 'cover_letter',
-          text: 'Invented text',
-          contentHash: 'c'.repeat(64),
-          claims: [
-            {
-              claim: '10 years of AWS',
-              kind: 'years_experience',
-              value: { years: 10, skill: 'AWS' },
-              sourceRefs: [],
-              verified: 'rejected',
-            },
+          kind: 'requires_human',
+          reason: 'Rejected factual claims after the single repair: no candidate_skill AWS',
+          failures: [
+            { claim: '10 years of AWS', kind: 'years_experience', reason: 'no candidate_skill AWS' },
           ],
-          verification: {
-            status: 'rejected',
-            failures: [{ claim: '10 years of AWS', kind: 'years_experience', reason: 'no candidate_skill AWS' }],
-          },
           generatedBy: {
             provider: 'mock',
             model: 'mock-text-v1',
@@ -247,6 +236,7 @@ describe('application engine — preparation flow (Phase 4)', () => {
               rejectedClaims: [],
             }).promptVersion,
             inputHash: input.inputHash,
+            asOfDate: input.asOfDate === null ? null : input.asOfDate.toISOString().slice(0, 10),
           },
         }),
       },
@@ -302,5 +292,168 @@ describe('application engine — preparation flow (Phase 4)', () => {
     await expect(
       engine.transition(created.application.id, 'READY_FOR_REVIEW', 'system', null, trace),
     ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe('application engine — Phase 4.1 sanitation', () => {
+  it('P4: uses the exact ResumeVersion recorded by the match, never a later one', async () => {
+    const { engine, state } = setup();
+    // A newer version appears after the match was computed.
+    state.resumeVersions.push({
+      ...buildResumeVersion(),
+      id: '00000000-0000-4000-8000-0000000000c9',
+      versionNumber: 2,
+      fileHash: 'e'.repeat(64),
+    });
+    const created = await engine.createFromMatch({ matchId: MATCH_ID, mode: 'assisted' }, trace);
+    expect(created.application.resumeVersionId).toBe('00000000-0000-4000-8000-000000000005');
+    const result = await engine.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+    expect(result.status).toBe('PREPARING');
+    const variant = state.documents.find((document) => document.kind === 'resume_variant');
+    expect(variant?.resumeVersionId).not.toBe('00000000-0000-4000-8000-0000000000c9');
+  });
+
+  it('P4: fails closed when the match recommends a resume without the exact version id', async () => {
+    const { engine } = setup({
+      match: { recommendedResumeId: '00000000-0000-4000-8000-000000000004', recommendedResumeVersionId: null },
+    });
+    await expect(
+      engine.createFromMatch({ matchId: MATCH_ID, mode: 'assisted' }, trace),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('P3: temporal anchor participates in the preparation identity for open-ended careers', async () => {
+    const openCandidate = buildMatchContext();
+    openCandidate.candidate.experiences[0]!.endDate = null;
+    const { repo } = createInMemoryRepo({
+      match: openCandidate,
+      resumeVersions: [buildResumeVersion()],
+    });
+    const engineNow = createApplicationEngine({
+      repo,
+      documents: buildFakeDocuments(),
+      storage: buildFakeStorage(),
+      clock,
+      policy,
+    });
+    const created = await engineNow.createFromMatch({ matchId: MATCH_ID, mode: 'assisted' }, trace);
+    const firstPrepare = await engineNow.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+
+    const engineLater = createApplicationEngine({
+      repo,
+      documents: buildFakeDocuments(),
+      storage: buildFakeStorage(),
+      clock: { now: () => new Date('2027-09-18T12:00:00.000Z') },
+      policy,
+    });
+    const secondPrepare = await engineLater.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+    expect(firstPrepare.inputHash).not.toBe(secondPrepare.inputHash);
+  });
+
+  it('P3: closed careers keep the same preparation identity across dates (no churn)', async () => {
+    const { repo } = createInMemoryRepo({
+      match: buildMatchContext(),
+      resumeVersions: [buildResumeVersion()],
+    });
+    const engineNow = createApplicationEngine({
+      repo,
+      documents: buildFakeDocuments(),
+      storage: buildFakeStorage(),
+      clock,
+      policy,
+    });
+    const created = await engineNow.createFromMatch({ matchId: MATCH_ID, mode: 'assisted' }, trace);
+    const firstPrepare = await engineNow.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+
+    const engineLater = createApplicationEngine({
+      repo,
+      documents: buildFakeDocuments(),
+      storage: buildFakeStorage(),
+      clock: { now: () => new Date('2027-09-18T12:00:00.000Z') },
+      policy,
+    });
+    const secondPrepare = await engineLater.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+    expect(firstPrepare.inputHash).toBe(secondPrepare.inputHash);
+  });
+
+  it('P5: a cache-hit preparation keeps reporting the persisted blockers', async () => {
+    const { engine, state } = setup({
+      documents: {
+        prepareCoverLetter: async (input) => ({
+          kind: 'draft',
+          draft: {
+            kind: 'cover_letter',
+            text: 'I work at a senior level.\n',
+            contentHash: 's'.repeat(64),
+            claims: [
+              {
+                claim: 'seniority: senior',
+                kind: 'seniority',
+                value: { level: 'senior' },
+                sourceRefs: [],
+                verified: 'unverifiable',
+              },
+            ],
+            verification: {
+              status: 'unverifiable',
+              failures: [{ claim: 'seniority: senior', kind: 'seniority', reason: 'no explicit source' }],
+            },
+            generatedBy: {
+              provider: 'mock',
+              model: 'mock-text-v1',
+              promptVersion: input.buildPrompt({
+                job: input.job,
+                facts: input.facts,
+                attempt: 0,
+                rejectedClaims: [],
+              }).promptVersion,
+              inputHash: input.inputHash,
+              asOfDate: input.asOfDate === null ? null : input.asOfDate.toISOString().slice(0, 10),
+            },
+          },
+        }),
+      },
+    });
+    const created = await engine.createFromMatch({ matchId: MATCH_ID, mode: 'assisted' }, trace);
+    const first = await engine.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+    expect(first.requiresHumanInput).toBe(true);
+    expect(first.blockers.some((blocker) => blocker.code === 'requires_human_input')).toBe(true);
+    expect(state.documents).toHaveLength(2);
+
+    const second = await engine.prepareDocuments(
+      created.application.id,
+      { buildCoverLetterPrompt: promptBuilder },
+      trace,
+    );
+    expect(second.created).toBe(false);
+    expect(second.requiresHumanInput).toBe(true);
+    expect(second.blockers.map((blocker) => blocker.code)).toEqual(
+      first.blockers.map((blocker) => blocker.code),
+    );
+    expect(state.documents).toHaveLength(2);
   });
 });

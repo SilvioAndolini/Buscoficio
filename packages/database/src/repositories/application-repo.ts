@@ -122,7 +122,6 @@ export interface MatchCreationContextData {
   isCurrent: boolean;
   recommendedResumeId: string | null;
   recommendedResumeVersionId: string | null;
-  recommendedResumeLatestVersionId: string | null;
   job: {
     id: string;
     title: string;
@@ -358,16 +357,6 @@ export function createApplicationRepo(db: Db, pool: Pool) {
         }
       }
 
-      let recommendedResumeLatestVersionId: string | null = null;
-      if (matchRow.recommendedResumeId !== null) {
-        const [version] = await db
-          .select({ id: t.resumeVersion.id })
-          .from(t.resumeVersion)
-          .where(eq(t.resumeVersion.resumeId, matchRow.recommendedResumeId))
-          .orderBy(desc(t.resumeVersion.versionNumber))
-          .limit(1);
-        recommendedResumeLatestVersionId = version?.id ?? null;
-      }
       const breakdown = (matchRow.scoreBreakdown ?? {}) as {
         resumeSelection?: { recommendedResumeVersionId?: unknown };
       };
@@ -386,7 +375,6 @@ export function createApplicationRepo(db: Db, pool: Pool) {
         isCurrent: matchRow.isCurrent,
         recommendedResumeId: matchRow.recommendedResumeId,
         recommendedResumeVersionId,
-        recommendedResumeLatestVersionId,
         job: {
           id: jobRow.id,
           title: jobRow.title,

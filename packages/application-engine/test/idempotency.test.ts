@@ -45,17 +45,39 @@ describe('application idempotency keys (Phase 4)', () => {
       sourceResumeVersionId: '00000000-0000-4000-8000-000000000011',
       profileFactsHash: 'p'.repeat(64),
       jobContentHash: 'j'.repeat(64),
-      promptVersion: 'cover-letter/v1',
+      promptVersion: 'cover-letter/v2',
       provider: 'mock',
       model: 'mock-text-v1',
+      preparationAsOfDate: null,
     };
     const first = computePreparationInputHash(input);
     expect(computePreparationInputHash({ ...input })).toBe(first);
-    expect(computePreparationInputHash({ ...input, promptVersion: 'cover-letter/v2' })).not.toBe(first);
+    expect(computePreparationInputHash({ ...input, promptVersion: 'cover-letter/v3' })).not.toBe(first);
     expect(computePreparationInputHash({ ...input, model: 'other-model' })).not.toBe(first);
     expect(computePreparationInputHash({ ...input, profileFactsHash: 'x'.repeat(64) })).not.toBe(first);
     expect(
       computePreparationInputHash({ ...input, sourceResumeVersionId: null }),
     ).not.toBe(first);
+  });
+
+  it('P3: the temporal anchor participates only when it applies', () => {
+    const input = {
+      applicationId: '00000000-0000-4000-8000-000000000010',
+      matchId: base.matchId,
+      sourceResumeVersionId: '00000000-0000-4000-8000-000000000011',
+      profileFactsHash: 'p'.repeat(64),
+      jobContentHash: 'j'.repeat(64),
+      promptVersion: 'cover-letter/v2',
+      provider: 'mock',
+      model: 'mock-text-v1',
+      preparationAsOfDate: '2026-09-18',
+    };
+    const withDate = computePreparationInputHash(input);
+    const otherDate = computePreparationInputHash({ ...input, preparationAsOfDate: '2027-09-18' });
+    const noDate = computePreparationInputHash({ ...input, preparationAsOfDate: null });
+    expect(withDate).not.toBe(otherDate);
+    expect(withDate).not.toBe(noDate);
+    // Closed careers (null) are stable across clock dates.
+    expect(computePreparationInputHash({ ...input, preparationAsOfDate: null })).toBe(noDate);
   });
 });

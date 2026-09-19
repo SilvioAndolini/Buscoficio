@@ -53,11 +53,16 @@ export interface PreparationInputHashInput {
   promptVersion: string;
   provider: string;
   model: string;
+  /**
+   * Temporal anchor (YYYY-MM-DD) when an open-ended experience exists; null
+   * when every experience range is closed (no daily churn). Phase 4.1, P3.
+   */
+  preparationAsOfDate: string | null;
 }
 
 /**
  * Document preparation identity: same inputs ⇒ same hash ⇒ existing documents
- * are reused instead of duplicated (task §67).
+ * are reused instead of duplicated (task §21).
  */
 export function computePreparationInputHash(input: PreparationInputHashInput): string {
   return sha256Hex(
@@ -69,6 +74,7 @@ export function computePreparationInputHash(input: PreparationInputHashInput): s
       input.jobContentHash,
       input.promptVersion,
       `${input.provider}:${input.model}`,
+      input.preparationAsOfDate ?? 'none',
     ].join('|'),
   );
 }

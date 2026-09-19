@@ -71,6 +71,13 @@
       "when": 1789773073283,
       "tag": "0009_application_preparation",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789781057183,
+      "tag": "0010_json_array_defaults",
+      "breakpoints": true
     }
   ]
 }

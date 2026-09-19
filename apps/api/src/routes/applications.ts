@@ -7,9 +7,8 @@ import {
   ProposedClaimSchema,
   toProposedClaim,
   type ApplicationStatus,
-  type PreparationBlocker,
-  type VerificationResult,
 } from '@job-system/core';
+import { derivePreparationBlockers } from '@job-system/application-engine';
 import { prepareApplicationJobId, uuidv7 } from '@job-system/shared';
 import { loadProfileFactsSource } from '@job-system/database';
 import { parse, type ApiCtx } from '../context.js';
@@ -57,8 +56,9 @@ const EDITABLE_STATUSES: readonly ApplicationStatus[] = [
   'REQUIRES_HUMAN_ACTION',
 ];
 
-function truncate(value: string, max = 100): string {
-  return value.length <= max ? value : `${value.slice(0, max)}…`;
+/** UTC date-only anchor for open-ended experiences (Phase 4.1, P3). */
+function utcDateOnly(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function pickJob(job: {
@@ -70,8 +70,7 @@ function pickJob(job: {
   employmentType: string | null;
   status: string;
   applicationTargetId: string | null;
-}) {
-  return {
+}) {  return {
     id: job.id,
     title: job.title,
     company: job.company,
@@ -82,51 +81,6 @@ function pickJob(job: {
     applicationTargetId: job.applicationTargetId,
   };
 }
-
-function deriveBlockers(input: {
-  requiresHumanReason: string | null;
-  documents: Array<{ id: string; kind: string; verification: VerificationResult }>;
-  answers: Array<{ id: string; questionText: string; requiresHumanInput: boolean }>;
-  targetStatus: string | null;
-}): PreparationBlocker[] {
-  const blockers: PreparationBlocker[] = [];
-  if (input.requiresHumanReason !== null) {
-    blockers.push({ code: 'requires_human_input', message: input.requiresHumanReason });
-  }
-  for (const answer of input.answers) {
-    if (answer.requiresHumanInput) {
-      blockers.push({
-        code: 'stale_answer',
-        message: `Answer requires human input: "${truncate(answer.questionText)}"`,
-        refId: answer.id,
-      });
-    }
-  }
-  for (const document of input.documents) {
-    if (document.verification.status === 'rejected') {
-      blockers.push({
-        code: 'rejected_claims',
-        message: `${document.kind} contains rejected claims`,
-        refId: document.id,
-      });
-    } else if (document.verification.status === 'unverifiable') {
-      blockers.push({
-        code: 'requires_human_input',
-        message: `${document.kind} contains unverifiable claims`,
-        refId: document.id,
-      });
-    }
-  }
-  if (input.targetStatus === 'blocked') {
-    blockers.push({
-      code: 'target_blocked',
-      message:
-        'Application target is blocked pending platform policy review; document preparation is still allowed (no submission in Phase 4)',
-    });
-  }
-  return blockers;
-}
-
 /**
  * Application endpoints (architecture doc 05 §7). Commands go through the
  * application-engine; preparation is enqueued (202) and never executed inside
@@ -186,7 +140,7 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
     const answers = await ctx.repos.applications.listAnswers(id);
     const events = await ctx.repos.applications.listEvents(id);
     const target = withJob?.target ?? null;
-    const blockers = deriveBlockers({
+    const blockers = derivePreparationBlockers({
       requiresHumanReason: application.requiresHumanReason,
       documents,
       answers,
@@ -270,10 +224,12 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
     const now = ctx.clock.now();
     const source = await loadProfileFactsSource(ctx.db, application.candidateId);
     const facts = ctx.documents.buildProfileFactsView(source, { includeSalary: true });
+    const hasOpenEnded = source.experiences.some((experience) => experience.endDate === null);
     const validation = ctx.documents.validateClaims(body.claims.map(toProposedClaim), facts, {
-      asOfDate: now,
+      asOfDate: hasOpenEnded ? utcDateOnly(now) : null,
     });
-    const rejected = validation.verification.status === 'rejected';
+    // Fail closed (Phase 4.1, P2): only a fully verified answer may be approved.
+    const fullyVerified = validation.verification.status === 'verified';
     const claims = validation.claims;
     const answer = await ctx.repos.applications.upsertAnswer({
       id: uuidv7(),
@@ -285,8 +241,8 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
       sourceRefs: claims.flatMap((claim) => claim.sourceRefs),
       claims,
       verification: validation.verification,
-      requiresHumanInput: rejected,
-      approved: body.approved && !rejected,
+      requiresHumanInput: !fullyVerified,
+      approved: body.approved && fullyVerified,
       now,
     });
     await ctx.repos.audit.append({

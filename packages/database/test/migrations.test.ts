@@ -148,6 +148,20 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       );
       expect((decisionFk.rows as Array<{ confdeltype: string }>)[0]?.confdeltype).toBe('n');
 
+      // Phase 4.1: array-shaped JSONB columns default to `[]`, never `{}`.
+      const arrayDefaults = await db.execute(sql`
+        select table_name, column_name, column_default
+        from information_schema.columns
+        where (table_name = 'application_answer' and column_name in ('source_refs', 'claims'))
+           or (table_name = 'application_document' and column_name = 'claims')
+        order by table_name, column_name
+      `);
+      const defaultsRows = arrayDefaults.rows as Array<{ column_default: string }>;
+      expect(defaultsRows).toHaveLength(3);
+      for (const row of defaultsRows) {
+        expect(row.column_default).toContain('[]');
+      }
+
       const constraints = await db.execute(
         sql`select conname, confdeltype from pg_constraint where conrelid = 'resume_version'::regclass and contype = 'f'`,
       );
@@ -173,6 +187,13 @@ describe.skipIf(!hasDatabase)('incremental upgrade from a pre-hardening database
   const databaseName = `job_system_upgrade_${Date.now()}`;
   let partialDir: string;
   let targetUrl: string;
+  let legacyIds: {
+    candidateId: string;
+    jobId: string;
+    matchId: string;
+    resumeId: string;
+    resumeVersionId: string;
+  } | null = null;
 
   function adminPool() {
     return createDb(adminUrl(), { max: 1 });
@@ -273,6 +294,8 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       const resumeId = uuidv7();
       const resumeVersionId = uuidv7();
       const spaceId = uuidv7();
+      const matchId = uuidv7();
+      legacyIds = { candidateId, jobId, matchId, resumeId, resumeVersionId };
       await stage4.db.execute(sql`
         insert into candidate_profile (id, full_name, email)
         values (${candidateId}, 'Ada Lovelace', 'ada@example.com')
@@ -296,7 +319,7 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       await stage4.db.execute(sql`
         insert into job_match (id, job_id, candidate_id, overall_score, score_breakdown, engine_version,
           weights_version, job_content_hash, candidate_profile_hash, resume_set_hash, identity_hash, is_current)
-        values (${uuidv7()}, ${jobId}, ${candidateId}, 0.7500, '{}'::jsonb, 'matching-v1', 'v1',
+        values (${matchId}, ${jobId}, ${candidateId}, 0.7500, '{}'::jsonb, 'matching-v1', 'v1',
           ${'c'.repeat(64)}, ${'b'.repeat(64)}, ${'e'.repeat(64)}, ${'f'.repeat(64)}, true)
       `);
       const legacyVector = sql.raw(`'[${Array(1536).fill('0.01').join(',')}]'::vector`);
@@ -313,7 +336,44 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
     }
 
     // Stage 5: apply 0008 (temporal column + legacy embedding invalidation) and
-    // 0009 (Phase 4 application aggregate).
+    // 0009 (Phase 4 application aggregate), then seed a legacy Phase 4 row that
+    // relied on the old `{}` JSONB defaults for array-shaped columns.
+    const stage5Dir = buildPartialFolder(9);
+    await runMigrations(targetUrl, stage5Dir);
+    rmSync(stage5Dir, { recursive: true, force: true });
+
+    const ids = legacyIds!;
+    const stage5 = createDb(targetUrl, { max: 1 });
+    try {
+      await stage5.db.execute(sql`
+        insert into application (id, job_id, candidate_id, match_id, mode, status, idempotency_key,
+          policy_version, score_at_creation)
+        values (${uuidv7()}, ${ids.jobId}, ${ids.candidateId}, ${ids.matchId}, 'assisted', 'PREPARING',
+          ${'9'.repeat(64)}, 'application-prep-v1', 0.7500)
+      `);
+      const [applicationRow] = (
+        await stage5.db.execute(sql`select id from application limit 1`)
+      ).rows as Array<{ id: string }>;
+      await stage5.db.execute(sql`
+        insert into application_answer (id, application_id, question_text, question_hash, answer_kind)
+        values (${uuidv7()}, ${applicationRow!.id}, 'Are you authorized to work?', ${'q'.repeat(64)}, 'user')
+      `);
+      await stage5.db.execute(sql`
+        insert into application_document (id, application_id, kind, storage_key, content_hash, generated_by)
+        values (${uuidv7()}, ${applicationRow!.id}, 'cover_letter',
+          'applications/x/cover-letter/hash.md', ${'h'.repeat(64)},
+          ${JSON.stringify({
+            provider: 'mock',
+            model: 'mock-text-v1',
+            promptVersion: 'cover-letter/v1',
+            inputHash: 'i'.repeat(64),
+          })}::jsonb)
+      `);
+    } finally {
+      await stage5.pool.end();
+    }
+
+    // Stage 6: apply 0010 (JSON array defaults + legacy `{}` normalization).
     await runMigrations(targetUrl);
   });
 
@@ -483,7 +543,8 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       expect(Number(counts.jobs)).toBeGreaterThan(0);
       expect(Number(counts.versions)).toBeGreaterThan(0);
       expect(Number(counts.spaces)).toBeGreaterThan(0);
-      expect(Number(counts.applications)).toBe(0);
+      // The legacy Phase 4 row is seeded after 0009 for the 0010 normalization test.
+      expect(Number(counts.applications)).toBe(1);
 
       const matchRow = await db.execute(
         sql`select engine_version, matching_as_of_date from job_match limit 1`,
@@ -497,6 +558,61 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
         sql`select indexdef from pg_indexes where indexname = 'application_active_job_candidate_uq'`,
       );
       expect((indexDef.rows as Array<{ indexdef: string }>)[0]?.indexdef).toContain('UNIQUE');
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('0010 normalizes legacy `{}` defaults to `[]` and preserves Phase 4 history', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      const answerResult = await db.execute(sql`
+        select source_refs, claims, verification, answer_text, question_text
+        from application_answer limit 1
+      `);
+      const answer = answerResult.rows[0] as {
+        source_refs: unknown;
+        claims: unknown;
+        verification: unknown;
+        answer_text: string | null;
+        question_text: string;
+      };
+      expect(answer.source_refs).toEqual([]);
+      expect(answer.claims).toEqual([]);
+      // Object-shaped default is intentionally untouched.
+      expect(answer.verification).toEqual({});
+      expect(answer.question_text).toBe('Are you authorized to work?');
+
+      const documentResult = await db.execute(sql`
+        select claims, generated_by from application_document limit 1
+      `);
+      const document = documentResult.rows[0] as {
+        claims: unknown;
+        generated_by: { promptVersion: string };
+      };
+      expect(document.claims).toEqual([]);
+      expect(document.generated_by.promptVersion).toBe('cover-letter/v1');
+
+      const applicationResult = await db.execute(sql`
+        select status, score_at_creation, preparation_snapshot from application limit 1
+      `);
+      const application = applicationResult.rows[0] as {
+        status: string;
+        score_at_creation: string;
+        preparation_snapshot: unknown;
+      };
+      expect(application.status).toBe('PREPARING');
+      expect(Number(application.score_at_creation)).toBeCloseTo(0.75);
+      expect(application.preparation_snapshot).toBeNull();
+
+      const defaults = await db.execute(sql`
+        select column_name, column_default from information_schema.columns
+        where (table_name = 'application_answer' and column_name in ('source_refs', 'claims'))
+           or (table_name = 'application_document' and column_name = 'claims')
+      `);
+      for (const row of defaults.rows as Array<{ column_default: string }>) {
+        expect(row.column_default).toContain('[]');
+      }
     } finally {
       await pool.end();
     }

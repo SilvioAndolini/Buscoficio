@@ -12,9 +12,9 @@ import {
   type PreparationResult,
   type StoragePort,
   type TraceContext,
-  type VerificationResult,
 } from '@job-system/core';
 import { uuidv7 } from '@job-system/shared';
+import { blockersRequireHumanInput, derivePreparationBlockers } from './blockers.js';
 import {
   computeApplicationIdempotencyKey,
   computePreparationInputHash,
@@ -97,18 +97,6 @@ const QUESTION_STATUSES: readonly ApplicationStatus[] = [
   'REQUIRES_HUMAN_ACTION',
 ];
 
-function truncate(value: string, max = 120): string {
-  return value.length <= max ? value : `${value.slice(0, max)}…`;
-}
-
-function claimBlockers(label: string, verification: VerificationResult): PreparationBlocker[] {
-  return verification.failures.map((failure) => ({
-    code: verification.status === 'rejected' ? ('rejected_claims' as const) : ('requires_human_input' as const),
-    message: `${label}: ${failure.reason}`,
-    refId: failure.claim,
-  }));
-}
-
 function toPreparationResult(
   applicationId: string,
   inputHash: string,
@@ -130,8 +118,13 @@ function toPreparationResult(
       verification: document.verification,
     })),
     blockers,
-    requiresHumanInput: blockers.length > 0,
+    requiresHumanInput: blockersRequireHumanInput(blockers),
   };
+}
+
+/** UTC date-only anchor (no time component) derived from the injected Clock. */
+function utcDateOnly(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 export function createApplicationEngine(deps: ApplicationEngineDeps): ApplicationEngine {
@@ -152,7 +145,20 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
       }
       return version.id;
     }
-    return context.recommendedResumeLatestVersionId;
+    // A match that recommends a resume MUST record the exact version it used;
+    // never fall back to the current latest version (Phase 4.1, P4).
+    if (context.recommendedResumeId !== null) {
+      throw new ConflictError(
+        'JobMatch does not contain the exact ResumeVersion used for recommendation; recompute matching.',
+        {
+          context: {
+            matchId: context.matchId,
+            recommendedResumeId: context.recommendedResumeId,
+          },
+        },
+      );
+    }
+    return null;
   }
 
   async function raiseHumanAction(
@@ -365,10 +371,18 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
     const now = deps.clock.now();
     const facts = deps.documents.buildProfileFactsView(context.candidate, { includeSalary: false });
 
-    const candidateSourceVersionId =
-      application.resumeVersionId ??
-      context.recommendedResumeVersionId ??
-      context.recommendedResumeLatestVersionId;
+    // Temporal anchor (Phase 4.1, P3): only open-ended experiences make the
+    // document content time-dependent; closed careers keep a stable identity.
+    const hasOpenEnded = context.candidate.experiences.some(
+      (experience) => experience.endDate === null,
+    );
+    const preparationAsOfDate = hasOpenEnded ? utcDateOnly(now) : null;
+    const preparationAsOfDateIso =
+      preparationAsOfDate === null ? null : preparationAsOfDate.toISOString().slice(0, 10);
+
+    // Exact ResumeVersion only (Phase 4.1, P4): never substitute the current
+    // latest version when the match recorded a concrete recommendation.
+    const candidateSourceVersionId = application.resumeVersionId ?? context.recommendedResumeVersionId;
     let sourceVersion: ResumeVersionRecord | null = null;
     if (candidateSourceVersionId !== null) {
       const version = await deps.repo.getResumeVersion(candidateSourceVersionId);
@@ -404,6 +418,7 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
       promptVersion: prompt.promptVersion,
       provider: deps.documents.provider,
       model: deps.documents.model,
+      preparationAsOfDate: preparationAsOfDateIso,
     });
 
     return deps.repo.withApplicationLock(application.id, async () => {
@@ -411,13 +426,25 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
       if (fresh === null) throw new NotFoundError(`Application not found: ${application.id}`);
       if (fresh.status !== 'PREPARING') {
         // A concurrent preparation already finished (or raised human action):
-        // return the current state without touching documents again.
+        // return the current persisted state without touching documents again.
         const documents = await deps.repo.listDocuments(application.id);
-        return toPreparationResult(application.id, inputHash, fresh.status, false, documents, []);
+        const answers = await deps.repo.listAnswers(application.id);
+        return toPreparationResult(
+          application.id,
+          inputHash,
+          fresh.status,
+          false,
+          documents,
+          derivePreparationBlockers({
+            requiresHumanReason: fresh.requiresHumanReason,
+            documents,
+            answers,
+            targetStatus: context.job.applicationTarget?.status ?? null,
+          }),
+        );
       }
       application = fresh;
 
-      const blockers: PreparationBlocker[] = [];
       let createdAny = false;
 
       const existingVariant = await deps.repo.findDocumentByInputHash(
@@ -436,7 +463,7 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
             kind: sourceVersion.kind,
             highlights: sourceVersion.highlights,
           },
-          asOfDate: now,
+          asOfDate: preparationAsOfDate,
           inputHash,
         });
         let tailored = await deps.repo.findTailoredVersionByParentAndHash(
@@ -471,9 +498,6 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
           now,
         });
         createdAny = createdAny || inserted.created;
-        if (draft.verification.status !== 'verified') {
-          blockers.push(...claimBlockers('Resume variant', draft.verification));
-        }
       }
 
       const existingCover = await deps.repo.findDocumentByInputHash(
@@ -482,28 +506,27 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
         inputHash,
       );
       if (existingCover === null) {
-        const draft = await deps.documents.prepareCoverLetter({
+        const prepared = await deps.documents.prepareCoverLetter({
           job: context.job,
           facts,
-          asOfDate: now,
+          asOfDate: preparationAsOfDate,
           buildPrompt: options.buildCoverLetterPrompt,
           inputHash,
           trace,
           maxRepairAttempts: deps.policy.maxFactualRepairAttempts,
         });
-        if (draft.verification.status === 'rejected') {
-          blockers.push(...claimBlockers('Cover letter', draft.verification));
-          const rejected = blockers.find((blocker) => blocker.code === 'rejected_claims');
+        if (prepared.kind === 'requires_human') {
           return raiseHumanAction(
             application,
-            rejected ?? {
-              code: 'rejected_claims',
-              message: 'Cover letter still contains rejected claims after the single repair attempt',
+            {
+              code: prepared.failures.length > 0 ? 'rejected_claims' : 'ai_unavailable',
+              message: prepared.reason,
             },
             trace,
             { inputHash, created: createdAny },
           );
         }
+        const draft = prepared.draft;
         const storageKey = `applications/${application.id}/cover-letter/${draft.contentHash}.md`;
         await deps.storage.put(storageKey, new TextEncoder().encode(draft.text), {
           contentType: 'text/markdown',
@@ -521,9 +544,6 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
           now,
         });
         createdAny = createdAny || inserted.created;
-        if (draft.verification.status === 'unverifiable') {
-          blockers.push(...claimBlockers('Cover letter', draft.verification));
-        }
       }
 
       const answers = await deps.repo.listAnswers(application.id);
@@ -539,7 +559,7 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
             verification: answer.verification,
           },
           facts,
-          asOfDate: now,
+          asOfDate: preparationAsOfDate,
         });
         if (resolved.action === 'stale') {
           await deps.repo.upsertAnswer({
@@ -556,11 +576,6 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
             approved: false,
             now,
           });
-          blockers.push({
-            code: 'stale_answer',
-            message: `Approved answer is no longer supported by the profile and was not reused: "${truncate(answer.questionText)}"`,
-            refId: answer.id,
-          });
         }
       }
 
@@ -571,14 +586,30 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
           fromStatus: 'PREPARING',
           toStatus: 'PREPARING',
           actor: 'system',
-          payload: { inputHash, blockers: blockers.map((blocker) => blocker.code) },
+          payload: { inputHash },
           correlationId: trace.correlationId,
           now,
         });
       }
 
+      // Blockers are always derived from persisted state (Phase 4.1, P5): a
+      // cache-hit preparation reports exactly the same blockers as the run that
+      // created the documents.
       const documents = await deps.repo.listDocuments(application.id);
-      return toPreparationResult(application.id, inputHash, 'PREPARING', createdAny, documents, blockers);
+      const refreshedAnswers = await deps.repo.listAnswers(application.id);
+      return toPreparationResult(
+        application.id,
+        inputHash,
+        'PREPARING',
+        createdAny,
+        documents,
+        derivePreparationBlockers({
+          requiresHumanReason: application.requiresHumanReason,
+          documents,
+          answers: refreshedAnswers,
+          targetStatus: context.job.applicationTarget?.status ?? null,
+        }),
+      );
     });
   }
 
@@ -619,7 +650,9 @@ export function createApplicationEngine(deps: ApplicationEngineDeps): Applicatio
               verification: prior.verification,
             },
       facts,
-      asOfDate: now,
+      asOfDate: context.candidate.experiences.some((experience) => experience.endDate === null)
+        ? utcDateOnly(now)
+        : null,
     });
     if (resolved.action === 'requires_human') {
       return { action: 'requires_human', answer: null, reason: resolved.reason };

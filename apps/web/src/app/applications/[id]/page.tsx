@@ -32,7 +32,13 @@ interface DocumentDto {
   contentHash: string;
   claims: ClaimDto[];
   verification: VerificationDto;
-  generatedBy: { provider: string; model: string; promptVersion: string; inputHash: string };
+  generatedBy: {
+    provider: string;
+    model: string;
+    promptVersion: string;
+    inputHash: string;
+    asOfDate?: string | null;
+  };
   createdAt: string;
 }
 
@@ -350,6 +356,9 @@ function ApplicationDetailContent(): ReactNode {
               <p className="muted">
                 {document.generatedBy.provider}:{document.generatedBy.model} ·{' '}
                 {document.generatedBy.promptVersion} · hash {document.contentHash.slice(0, 12)}… ·{' '}
+                {document.generatedBy.asOfDate
+                  ? `ancla temporal ${document.generatedBy.asOfDate} · `
+                  : ''}
                 {document.storageKey}
               </p>
               <ClaimTable claims={document.claims} verification={document.verification} />

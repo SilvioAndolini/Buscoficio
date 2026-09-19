@@ -1045,6 +1045,39 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     });
     expect((answersList.json() as { items: unknown[] }).items).toHaveLength(1);
 
+    // P2: a user answer with an unverifiable claim is never approved and stays
+    // visible as a blocker (only fully verified facts are safe to reuse).
+    const unverifiableAnswer = await app.inject({
+      method: 'PUT',
+      url: `/v1/applications/${created.application.id}/answers`,
+      headers: withCookie(),
+      payload: {
+        questionText: 'What is your seniority level?',
+        answerText: 'Senior engineer.',
+        approved: true,
+        claims: [{ claim: 'Senior engineer', kind: 'seniority', value: { level: 'senior' } }],
+      },
+    });
+    expect(unverifiableAnswer.statusCode).toBe(201);
+    const blockedAnswer = unverifiableAnswer.json() as {
+      approved: boolean;
+      requiresHumanInput: boolean;
+      verification: { status: string };
+    };
+    expect(blockedAnswer.approved).toBe(false);
+    expect(blockedAnswer.requiresHumanInput).toBe(true);
+    expect(blockedAnswer.verification.status).toBe('unverifiable');
+
+    const detailWithBlocker = await app.inject({
+      method: 'GET',
+      url: `/v1/applications/${created.application.id}`,
+      headers: withCookie(),
+    });
+    const blockerCodes = (detailWithBlocker.json() as { blockers: Array<{ code: string }> }).blockers.map(
+      (blocker) => blocker.code,
+    );
+    expect(blockerCodes).toContain('stale_answer');
+
     // 6. No submit/reconcile endpoints exist in Phase 4; READY_FOR_REVIEW is unreachable.
     const submit = await app.inject({
       method: 'POST',

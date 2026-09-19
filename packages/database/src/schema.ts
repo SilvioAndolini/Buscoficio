@@ -39,6 +39,8 @@ export const VECTOR_DIMENSIONS = EMBEDDING_VECTOR_DIMENSIONS;
 const emptyTextArray = sql`'{}'::text[]`;
 const emptyUuidArray = sql`'{}'::uuid[]`;
 const emptyJson = sql`'{}'::jsonb`;
+/** JSONB array default: `{}` is an object and breaks array-shaped columns. */
+const emptyJsonArray = sql`'[]'::jsonb`;
 
 /* ------------------------------------------------------------------ */
 /* Candidate                                                           */
@@ -717,8 +719,8 @@ export const applicationAnswer = pgTable(
     questionHash: text('question_hash').notNull(),
     answerText: text('answer_text'),
     answerKind: text('answer_kind').notNull(),
-    sourceRefs: jsonb('source_refs').notNull().default(emptyJson),
-    claims: jsonb('claims').notNull().default(emptyJson),
+    sourceRefs: jsonb('source_refs').notNull().default(emptyJsonArray),
+    claims: jsonb('claims').notNull().default(emptyJsonArray),
     verification: jsonb('verification').notNull().default(emptyJson),
     requiresHumanInput: boolean('requires_human_input').notNull().default(false),
     approved: boolean('approved').notNull().default(false),
@@ -744,7 +746,7 @@ export const applicationDocument = pgTable(
     }),
     storageKey: text('storage_key').notNull(),
     contentHash: text('content_hash').notNull(),
-    claims: jsonb('claims').notNull().default(emptyJson),
+    claims: jsonb('claims').notNull().default(emptyJsonArray),
     verification: jsonb('verification').notNull().default(emptyJson),
     generatedBy: jsonb('generated_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

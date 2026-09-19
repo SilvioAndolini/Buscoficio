@@ -7,6 +7,7 @@ import {
   computeDedupKey,
   computeJobContentHash,
   computeUrlHash,
+  ConflictError,
   type NormalizedJob,
   type TextGenerationPort,
   type TraceContext,
@@ -150,6 +151,7 @@ async function seedCandidate(): Promise<Scenario> {
 async function seedMatchedJob(
   scenario: Scenario,
   title: string,
+  options: { omitResumeSelection?: boolean } = {},
 ): Promise<{ jobId: string; matchId: string }> {
   const jobRepo = createJobRepo(handle.db);
   const matchingRepo = createMatchingRepo(handle.db);
@@ -193,13 +195,15 @@ async function seedMatchedJob(
     jobId,
     candidateId: scenario.candidateId,
     overallScore: 0.82,
-    scoreBreakdown: {
-      resumeSelection: {
-        recommendedResumeId: scenario.resumeId,
-        recommendedResumeVersionId: scenario.resumeVersionId,
-        reasons: ['category match'],
-      },
-    },
+    scoreBreakdown: options.omitResumeSelection
+      ? {}
+      : {
+          resumeSelection: {
+            recommendedResumeId: scenario.resumeId,
+            recommendedResumeVersionId: scenario.resumeVersionId,
+            reasons: ['category match'],
+          },
+        },
     reasons: ['strong skills coverage'],
     missingRequirements: [],
     matchingSkills: ['React'],
@@ -218,12 +222,15 @@ async function seedMatchedJob(
   return { jobId, matchId: match.id };
 }
 
-function buildService(textProvider?: TextGenerationPort): ApplicationService {
+function buildService(
+  textProvider?: TextGenerationPort,
+  clockOverride?: { now: () => Date },
+): ApplicationService {
   return createApplicationService({
     repo: createApplicationRepo(handle.db, handle.pool),
     aiUsageRepo: createAiUsageRepo(handle.db),
     storage,
-    clock,
+    clock: clockOverride ?? clock,
     env,
     logger,
     ...(textProvider === undefined ? {} : { textProvider }),
@@ -239,20 +246,20 @@ function trace(applicationId?: string): TraceContext {
 const INVENTED_COVER_LETTER = {
   kind: 'structured' as const,
   value: {
-    text: 'I have 10 years of AWS experience.',
-    claims: [
-      { claim: '10 years AWS', kind: 'years_experience', value: { years: 10, skill: 'AWS' } },
-    ],
+    tone: 'direct',
+    opening: 'direct',
+    closing: 'thanks',
+    claims: [{ kind: 'years_experience', value: { years: 10, skill: 'AWS' } }],
   },
 };
 
 const VALID_COVER_LETTER = {
   kind: 'structured' as const,
   value: {
-    text: 'I have 5 years of React experience.',
-    claims: [
-      { claim: '5 years React', kind: 'years_experience', value: { years: 5, skill: 'React' } },
-    ],
+    tone: 'direct',
+    opening: 'direct',
+    closing: 'thanks',
+    claims: [{ kind: 'years_experience', value: { years: 5, skill: 'React' } }],
   },
 };
 
@@ -351,7 +358,10 @@ describeIntegration('application preparation integration (Phase 4)', () => {
     );
     const cover = documents.find((document) => document.kind === 'cover_letter')!;
     expect(cover.verification.status).toBe('verified');
-    expect(cover.claims[0]!.claim).toBe('5 years React');
+    expect(cover.claims[0]!.claim).toBe('5 years of experience with React');
+    const stored = new TextDecoder().decode(await storage.get(cover.storageKey));
+    expect(stored).toContain('I have 5 years of experience with React.');
+    expect(stored).not.toContain('AWS');
   });
 
   it('raises REQUIRES_HUMAN_ACTION after the single repair fails', async () => {
@@ -487,5 +497,159 @@ describeIntegration('application preparation integration (Phase 4)', () => {
     expect(stale.answer.approved).toBe(false);
     expect(stale.answer.requiresHumanInput).toBe(true);
     expect(stale.answer.verification.status).toBe('rejected');
+  });
+
+  it('P4: keeps the exact ResumeVersion recorded by the match when a newer CV exists', async () => {
+    const scenario = await seedCandidate();
+    const { matchId } = await seedMatchedJob(scenario, 'Exact CV Job');
+    const resumeRepo = createResumeRepo(handle.db);
+    // A newer immutable version appears after the match was computed.
+    await resumeRepo.createVersion(scenario.resumeId, {
+      kind: 'original',
+      storageKey: `resumes/${scenario.resumeId}/v2.txt`,
+      fileHash: 'c'.repeat(64),
+      highlights: { skills: ['React', 'TypeScript'] },
+    });
+    const service = buildService();
+    const created = await service.createFromMatch({ matchId, mode: 'assisted' }, trace());
+    expect(created.application.resumeVersionId).toBe(scenario.resumeVersionId);
+
+    await service.prepare(created.application.id, trace(created.application.id));
+    const versions = await handle.db.execute(sql`
+      select parent_version_id from resume_version where kind = 'tailored'
+    `);
+    const rows = versions.rows as Array<{ parent_version_id: string | null }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.parent_version_id).toBe(scenario.resumeVersionId);
+  });
+
+  it('P4: fails closed when the match recommends a resume without the exact version id', async () => {
+    const scenario = await seedCandidate();
+    const { matchId } = await seedMatchedJob(scenario, 'Legacy Match Job', {
+      omitResumeSelection: true,
+    });
+    const service = buildService();
+    await expect(
+      service.createFromMatch({ matchId, mode: 'assisted' }, trace()),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('P3: open-ended careers change preparation identity across dates', async () => {
+    const scenario = await seedCandidate();
+    const candidateRepo = createCandidateRepo(handle.db);
+    await candidateRepo.addExperience(scenario.candidateId, {
+      company: 'Current Corp',
+      title: 'Staff Engineer',
+      startDate: new Date('2024-02-01T00:00:00Z'),
+      endDate: null,
+      description: 'Ongoing role',
+      skills: ['React'],
+    });
+    const job = await seedMatchedJob(scenario, 'Open Career Job');
+    const serviceA = buildService(undefined, { now: () => new Date('2026-09-18T12:00:00Z') });
+    const application = await serviceA.createFromMatch(
+      { matchId: job.matchId, mode: 'assisted' },
+      trace(),
+    );
+    const preparedA = await serviceA.prepare(application.application.id, trace(application.application.id));
+    const serviceB = buildService(undefined, { now: () => new Date('2027-09-18T12:00:00Z') });
+    const preparedB = await serviceB.prepare(application.application.id, trace(application.application.id));
+    expect(preparedA.inputHash).not.toBe(preparedB.inputHash);
+  });
+
+  it('P3: closed careers keep the same preparation identity across dates (no churn)', async () => {
+    const scenario = await seedCandidate();
+    const job = await seedMatchedJob(scenario, 'Closed Career Job');
+    const serviceA = buildService(undefined, { now: () => new Date('2026-09-18T12:00:00Z') });
+    const application = await serviceA.createFromMatch(
+      { matchId: job.matchId, mode: 'assisted' },
+      trace(),
+    );
+    const preparedA = await serviceA.prepare(application.application.id, trace(application.application.id));
+    const serviceB = buildService(undefined, { now: () => new Date('2027-09-18T12:00:00Z') });
+    const preparedB = await serviceB.prepare(application.application.id, trace(application.application.id));
+    expect(preparedA.inputHash).toBe(preparedB.inputHash);
+  });
+
+  it('P2: an unverifiable answer is never reused from the bank', async () => {
+    const scenario = await seedCandidate();
+    const first = await seedMatchedJob(scenario, 'Seniority First');
+    const second = await seedMatchedJob(scenario, 'Seniority Second');
+    const service = buildService();
+    const repo = createApplicationRepo(handle.db, handle.pool);
+
+    const applicationA = await service.createFromMatch(
+      { matchId: first.matchId, mode: 'assisted' },
+      trace(),
+    );
+    await repo.upsertAnswer({
+      id: uuidv7(),
+      applicationId: applicationA.application.id,
+      questionText: 'What is your seniority level?',
+      questionHash: hashQuestion('What is your seniority level?'),
+      answerText: 'Senior engineer.',
+      answerKind: 'user',
+      sourceRefs: [],
+      claims: [
+        {
+          claim: 'seniority: senior',
+          kind: 'seniority',
+          value: { level: 'senior' },
+          sourceRefs: [],
+          verified: 'unverifiable',
+        },
+      ],
+      verification: { status: 'unverifiable', failures: [] },
+      requiresHumanInput: false,
+      approved: true,
+      now: clock.now(),
+    });
+
+    const applicationB = await service.createFromMatch(
+      { matchId: second.matchId, mode: 'assisted' },
+      trace(),
+    );
+    const resolved = await service.resolveQuestion(
+      applicationB.application.id,
+      'What is your seniority level?',
+      trace(applicationB.application.id),
+    );
+    expect(resolved.action).toBe('stale');
+    if (resolved.action !== 'stale') throw new Error('unreachable');
+    expect(resolved.answer.approved).toBe(false);
+    expect(resolved.answer.requiresHumanInput).toBe(true);
+    expect(resolved.answer.verification.status).toBe('unverifiable');
+  });
+
+  it('P5: repeated preparation reports the same persisted blockers (cache hit)', async () => {
+    const scenario = await seedCandidate();
+    const { matchId } = await seedMatchedJob(scenario, 'Blocker Replay Job');
+    const provider = new MockTextGenerationProvider({
+      responses: [
+        {
+          kind: 'structured',
+          value: {
+            tone: 'direct',
+            opening: 'direct',
+            closing: 'thanks',
+            claims: [{ kind: 'seniority', value: { level: 'senior' } }],
+          },
+        },
+      ],
+    });
+    const service = buildService(provider);
+    const created = await service.createFromMatch({ matchId, mode: 'assisted' }, trace());
+    const first = await service.prepare(created.application.id, trace(created.application.id));
+    expect(first.requiresHumanInput).toBe(true);
+    expect(first.blockers.some((blocker) => blocker.code === 'requires_human_input')).toBe(true);
+
+    const second = await service.prepare(created.application.id, trace(created.application.id));
+    expect(second.created).toBe(false);
+    expect(second.requiresHumanInput).toBe(true);
+    expect(second.blockers.map((blocker) => blocker.code).sort()).toEqual(
+      first.blockers.map((blocker) => blocker.code).sort(),
+    );
+    const repo = createApplicationRepo(handle.db, handle.pool);
+    expect(await repo.listDocuments(created.application.id)).toHaveLength(2);
   });
 });

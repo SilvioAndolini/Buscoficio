@@ -76,7 +76,6 @@ export function buildMatchContext(overrides: Partial<MatchCreationContext> = {})
     isCurrent: true,
     recommendedResumeId: RESUME_ID,
     recommendedResumeVersionId: RESUME_VERSION_ID,
-    recommendedResumeLatestVersionId: RESUME_VERSION_ID,
     job: {
       id: JOB_ID,
       title: 'Senior TypeScript Engineer',
@@ -133,21 +132,25 @@ export function buildFakeDocuments(overrides: Partial<DocumentsPort> = {}): Docu
       highlights: {},
     }),
     prepareCoverLetter: async (input) => ({
-      kind: 'cover_letter',
-      text: 'Dear hiring team,\n',
-      contentHash: 'b'.repeat(64),
-      claims: [],
-      verification: { status: 'verified', failures: [] },
-      generatedBy: {
-        provider: 'mock',
-        model: 'mock-text-v1',
-        promptVersion: input.buildPrompt({
-          job: input.job,
-          facts: input.facts,
-          attempt: 0,
-          rejectedClaims: [],
-        }).promptVersion,
-        inputHash: input.inputHash,
+      kind: 'draft',
+      draft: {
+        kind: 'cover_letter',
+        text: 'Dear hiring team,\n',
+        contentHash: 'b'.repeat(64),
+        claims: [],
+        verification: { status: 'verified', failures: [] },
+        generatedBy: {
+          provider: 'mock',
+          model: 'mock-text-v1',
+          promptVersion: input.buildPrompt({
+            job: input.job,
+            facts: input.facts,
+            attempt: 0,
+            rejectedClaims: [],
+          }).promptVersion,
+          inputHash: input.inputHash,
+          asOfDate: input.asOfDate === null ? null : input.asOfDate.toISOString().slice(0, 10),
+        },
       },
     }),
     resolveAnswer: () => ({ action: 'requires_human', reason: 'no approved answer' }),
