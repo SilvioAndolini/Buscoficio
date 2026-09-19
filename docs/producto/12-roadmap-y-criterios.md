@@ -158,6 +158,22 @@ engine/documents/ai, integración Postgres (constraints, concurrencia, lock, res
 (match→application→prepare, CV original intacto, reparación ok/fallida, concurrencia), E2E API
 (create/prepare/answers/archive, `mode=auto` 422, submit 404) y Playwright 4/4.
 
+**Fase 4.1 — saneamiento verificado (2026-09-18):** (1) **claim completeness**: la cover letter
+pasa a generación estructurada (plan de claims) + **renderer determinista** — no existe texto
+libre, así que un hecho factual no puede entrar en el documento sin una claim validada
+(`cover-letter/v2`; `{text, claims:[]}` inventado, claim AWS oculta y prompt injection ⇒ nunca
+verificado, `REQUIRES_HUMAN_ACTION`); (2) **`unverifiable` fail-closed**: sólo `verified` permite
+reuse/aprobación, en respuestas (`PUT`), banco (`resolveAnswer`) y documentos (blocker siempre);
+(3) **ancla temporal** `preparationAsOfDate` (Clock) dentro de `preparationInputHash` y en
+`generatedBy.asOfDate` (carreras cerradas sin churn); (4) **CV exacto**: sin fallback a la última
+versión, `recommendedResumeId` sin versión ⇒ `ConflictError`, se elimina
+`recommendedResumeLatestVersionId`; (5) **blockers idempotentes**:
+`derivePreparationBlockers` puro compartido por engine y API, cache-hit conserva blockers;
+(6) **defaults JSONB** de arrays corregidos con migración `0010_json_array_defaults.sql`
+(normalización idempotente de `{}` legacy). Evidencia: unit documents/engine/ai, integración
+Postgres (0010 + histórico), worker (temporal, CV exacto, banco no verificado, replay de
+blockers), E2E API (respuesta no verificada bloqueada) y Playwright.
+
 ## Fase 5 — Browser Automation
 
 **Objetivo:** preparación completa y envío simulado (`DRY_RUN`) sobre fake-ATS y 1–2 targets permitidos.

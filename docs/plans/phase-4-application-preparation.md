@@ -289,3 +289,107 @@ incoherentes.
 AUTO_APPLY, cuotas, `canRealSubmit`, policy engine completo, UI de políticas, Jev browser
 (`map_form_field`, `choose_action`), `READY_FOR_REVIEW` y `APPROVED` operativos,
 `preparationSnapshot` no nulo.
+
+## 19. Fase 4.1 — saneamiento (pre-Fase 5)
+
+Correcciones sobre la implementación existente, sin rediseño ni estados nuevos:
+
+### P1 — Claim completeness (crítico)
+
+El contrato anterior `{text, claims[]}` permitía que un proveedor escribiera un hecho inventado
+(“I am AWS Certified…”) con `claims=[]` y que `validateClaims([])` lo diera por verificado. La
+propiedad exigida ahora es:
+
+```
+texto factual ⇒ claim explícita ⇒ validador determinista ⇒ sourceRefs ⇒ verified
+```
+
+Arquitectura (structured generation + deterministic rendering):
+
+```
+ProfileFactsView
+  ↓
+LLM devuelve un PLAN estructurado {tone, opening, closing, claims:[{kind,value}]}
+  ↓
+validateClaims(claims)  (autoridad; sourceRefs las genera el validador)
+  ↓
+renderer determinista (plantillas de código + una frase por claim validado)
+  ↓
+texto final (bytes) + contentHash
+```
+
+- El modelo **no escribe el documento**: no existe canal de texto libre. Cada frase factual se
+  renderiza desde `kind` + `value` validados; saludo/cierre/apertura son plantillas del código.
+- `claim.claim` es sólo etiqueta de display/auditoría (`describeClaim`), nunca autoridad.
+- Completitud: toda claim no rechazada debe ser renderizable; si no, es output inválido. Tras el
+  único intento de reparación, output inválido o claims rechazadas ⇒ `requires_human`
+  (`REQUIRES_HUMAN_ACTION`) y **no se persiste documento**. La degradación determinista sólo se usa
+  ante indisponibilidad del proveedor (timeout/error), y sus claims derivan de `ProfileFactsView`.
+- `CoverLetterOutputSchema` pasa a `cover-letter/v2` (el prompt version participa en la identidad).
+- Tests: `{text, claims:[]}` inventado ⇒ nunca verificado; claim AWS no declarada/declarada ⇒
+  bloqueado; inyección en la oferta que pide ocultar el hecho de `claims` ⇒ bloqueado; sólo hechos
+  declarados llegan al texto; renderer byte-determinista.
+
+### P2 — `unverifiable` fail-closed
+
+Regla única: `verified` ⇒ reusable/aprobable; `unverifiable` y `rejected` ⇒ revisión humana.
+
+- `resolveAnswer`: sólo reutiliza con `verification.status === 'verified'`; `unverifiable` también
+  es `stale` (`requiresHumanInput=true`, `approved=false`).
+- `PUT /v1/applications/:id/answers`: `fullyVerified = status === 'verified'`;
+  `requiresHumanInput = !fullyVerified`; `approved = body.approved && fullyVerified`. Una respuesta
+  sin claims es `verified` vacío y puede aprobarse (no se fuerza a inventar claims).
+- Documentos `unverifiable` se persisten para revisión pero siempre generan blocker
+  `requires_human_input` (nunca “factualidad completa”).
+
+### P3 — Ancla temporal en la identidad de preparación
+
+`preparationAsOfDate` (YYYY-MM-DD) existe sólo si el candidato tiene alguna experiencia
+`endDate=null`; proviene exclusivamente del `Clock` inyectado. Se incorpora a
+`preparationInputHash` (`'none'` cuando no aplica) y se persiste en `generatedBy.asOfDate`
+(provenance visible en API/UI; sin migración DDL porque `generated_by` es JSONB).
+
+```
+preparationInputHash = sha256(
+  applicationId | matchId | sourceResumeVersionId | profileFactsHash |
+  jobContentHash | promptVersion | provider | model | preparationAsOfDate
+)
+```
+
+Carreras cerradas ⇒ `null` ⇒ sin churn diario; empleo abierto ⇒ la fecha participa y el documento
+se regenera cuando cambia el día.
+
+### P4 — CV exacto del JobMatch
+
+Eliminado el fallback silencioso a la última versión:
+
+- `recommendedResumeVersionId != null` ⇒ se usa exactamente esa versión (se revalida que exista y
+  pertenezca al candidato; si no, `ConflictError`).
+- `recommendedResumeId != null` con `recommendedResumeVersionId == null` ⇒ `ConflictError`
+  (“JobMatch does not contain the exact ResumeVersion used for recommendation; recompute
+  matching.”). Se elimina `recommendedResumeLatestVersionId` del puerto y del repo.
+- `recommendedResumeId == null` ⇒ sin CV: `missing_resume` ⇒ `REQUIRES_HUMAN_ACTION`.
+
+### P5 — Blockers idempotentes
+
+`derivePreparationBlockers({requiresHumanReason, documents, answers, targetStatus})` (puro, en
+`application-engine`) es la única fuente, usada por el engine (resultado de `prepare`) y por la API
+(detalle). Un cache-hit de preparación reconstruye los blockers desde el estado persistido: un
+documento `unverifiable`/`rejected` o una respuesta no verificada bloquean en todas las
+ejecuciones. `target_blocked` es informativo (no marca `requiresHumanInput`). El evento
+`application.documents_prepared` se sigue emitiendo sólo cuando se creó algún documento.
+
+### P6 — Defaults JSONB de arrays
+
+`application_answer.source_refs`, `application_answer.claims` y `application_document.claims` eran
+`jsonb DEFAULT '{}'` (objeto) pese a ser arrays. Migración forward-only
+`0010_json_array_defaults.sql`:
+
+```sql
+ALTER TABLE ... ALTER COLUMN ... SET DEFAULT '[]'::jsonb;
+UPDATE ... SET ... = '[]'::jsonb WHERE ... = '{}'::jsonb;  -- legacy, idempotente
+```
+
+Sólo normaliza objetos vacíos; arrays válidos intactos; `verification`/`payload` siguen siendo
+objetos. Drizzle usa el mismo default `[]` para que fresh y upgraded no diverjan. Tests: fresh
+(defaults `[]`), upgrade 0009→0010 con fila legacy `{}` normalizada e histórico intacto.
