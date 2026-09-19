@@ -6,10 +6,13 @@ import {
   ValidationError,
   systemClock,
   type Clock,
+  type DocumentsPort,
   type StoragePort,
 } from '@job-system/core';
+import type { ApplicationEngine } from '@job-system/application-engine';
 import type {
   Db,
+  createApplicationRepo,
   createAuditRepo,
   createCandidateRepo,
   createDedupRepo,
@@ -31,6 +34,7 @@ export interface ApiRepos {
   dedup: ReturnType<typeof createDedupRepo>;
   stats: ReturnType<typeof createStatsRepo>;
   matching: ReturnType<typeof createMatchingRepo>;
+  applications: ReturnType<typeof createApplicationRepo>;
 }
 
 export interface ApiCtx {
@@ -42,11 +46,16 @@ export interface ApiCtx {
   storage: StoragePort;
   searchQueue: Queue;
   matchQueue: Queue;
+  documentsQueue: Queue;
   maintenanceQueue: Queue;
   /** Deterministic engine version used in BullMQ match job ids. */
   engineVersion: string;
   /** Runtime embedding descriptor (same resolution as the worker). */
   embeddingRuntime: EmbeddingRuntime;
+  /** Phase 4 application lifecycle engine (commands only; preparation runs in the worker). */
+  applicationEngine: ApplicationEngine;
+  /** Documents service for claim validation of user answers (no generation in-request). */
+  documents: DocumentsPort;
   clock: Clock;
   repos: ApiRepos;
 }

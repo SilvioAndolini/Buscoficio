@@ -11,6 +11,8 @@ import {
   type StoragePort,
 } from '@job-system/core';
 import {
+  createApplicationRepo,
+  createApplicationRepositoryPort,
   createAuditRepo,
   createCandidateRepo,
   createDedupRepo,
@@ -21,9 +23,16 @@ import {
   createStatsRepo,
   type DbHandle,
 } from '@job-system/database';
+import {
+  MAX_FACTUAL_REPAIR_ATTEMPTS,
+  buildPolicyVersion,
+  createApplicationEngine,
+} from '@job-system/application-engine';
+import { createTextGenerationProvider } from '@job-system/ai';
+import { createDocumentsService } from '@job-system/documents';
 import { ENGINE_VERSION } from '@job-system/matching';
 import type { Logger } from '@job-system/observability';
-import { resolveEmbeddingRuntime, type Env } from '@job-system/shared';
+import { resolveEmbeddingRuntime, resolveTextRuntime, textApiKey, type Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
 import { requireSession } from './auth.js';
 import type { ApiCtx } from './context.js';
@@ -38,6 +47,7 @@ import { registerApplicationTargetRoutes } from './routes/application-targets.js
 import { registerDedupRoutes } from './routes/dedup.js';
 import { registerStatsRoutes } from './routes/stats.js';
 import { registerMatchRoutes } from './routes/matches.js';
+import { registerApplicationRoutes } from './routes/applications.js';
 
 export interface AppDeps {
   env: Env;
@@ -47,6 +57,7 @@ export interface AppDeps {
   storage: StoragePort;
   searchQueue: Queue;
   matchQueue: Queue;
+  documentsQueue: Queue;
   maintenanceQueue: Queue;
   clock?: Clock;
 }
@@ -61,6 +72,31 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(cookie, { secret: deps.env.AUTH_SECRET });
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
 
+  const clock = deps.clock ?? systemClock;
+  const applicationRepo = createApplicationRepo(deps.dbHandle.db, deps.dbHandle.pool);
+  const textRuntime = resolveTextRuntime(deps.env);
+  const textProvider = createTextGenerationProvider({
+    provider: textRuntime.provider,
+    model: textRuntime.model,
+    apiKey: textApiKey(deps.env),
+    baseUrl: deps.env.AI_BASE_URL,
+  });
+  const documents = createDocumentsService({ textProvider });
+  const applicationEngine = createApplicationEngine({
+    repo: createApplicationRepositoryPort(applicationRepo),
+    documents,
+    storage: deps.storage,
+    clock,
+    policy: {
+      version: buildPolicyVersion(
+        deps.env.APPLICATION_PREPARATION_POLICY_VERSION,
+        deps.env.REAPPLICATION_COOLDOWN_DAYS,
+      ),
+      reapplicationCooldownDays: deps.env.REAPPLICATION_COOLDOWN_DAYS,
+      maxFactualRepairAttempts: MAX_FACTUAL_REPAIR_ATTEMPTS,
+    },
+  });
+
   const ctx: ApiCtx = {
     env: deps.env,
     logger: deps.logger,
@@ -70,10 +106,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     storage: deps.storage,
     searchQueue: deps.searchQueue,
     matchQueue: deps.matchQueue,
+    documentsQueue: deps.documentsQueue,
     maintenanceQueue: deps.maintenanceQueue,
     engineVersion: ENGINE_VERSION,
     embeddingRuntime: resolveEmbeddingRuntime(deps.env),
-    clock: deps.clock ?? systemClock,
+    applicationEngine,
+    documents,
+    clock,
     repos: {
       candidate: createCandidateRepo(deps.dbHandle.db),
       resume: createResumeRepo(deps.dbHandle.db),
@@ -83,6 +122,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       dedup: createDedupRepo(deps.dbHandle.db),
       stats: createStatsRepo(deps.dbHandle.db),
       matching: createMatchingRepo(deps.dbHandle.db),
+      applications: applicationRepo,
     },
   };
 
@@ -134,6 +174,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerDedupRoutes(app, ctx);
   registerStatsRoutes(app, ctx);
   registerMatchRoutes(app, ctx);
+  registerApplicationRoutes(app, ctx);
 
   return app;
 }

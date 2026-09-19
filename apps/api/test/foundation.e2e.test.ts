@@ -20,7 +20,7 @@ import {
 } from '@job-system/job-sources';
 import { startWorkerRuntime, type WorkerRuntime } from '@job-system/worker';
 import { buildApp } from '../src/app.js';
-import { createMaintenanceQueue, createMatchQueue, createSearchQueue } from '../src/search-queue.js';
+import { createMaintenanceQueue, createMatchQueue, createSearchQueue, createDocumentsQueue } from '../src/search-queue.js';
 import { createRedisConnection } from '../src/redis.js';
 
 const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? '';
@@ -60,6 +60,8 @@ function buildEnv(databaseUrl: string, redisUrl: string, storageDir: string): En
     EMBEDDING_DIMENSIONS: 1536,
     EMBEDDING_SPACE_VERSION: 'v1',
     EMBEDDING_PROVIDER: 'mock',
+    APPLICATION_PREPARATION_POLICY_VERSION: 'application-prep-v1',
+    REAPPLICATION_COOLDOWN_DAYS: 30,
   };
 }
 
@@ -160,6 +162,7 @@ let runtime: WorkerRuntime;
 let queue: ReturnType<typeof createSearchQueue>;
 let maintenanceQueue: ReturnType<typeof createMaintenanceQueue>;
 let matchQueue: ReturnType<typeof createMatchQueue>;
+let documentsQueue: ReturnType<typeof createDocumentsQueue>;
 let redis: ReturnType<typeof createRedisConnection>;
 let storageDir: string;
 let fixtureServer: Server;
@@ -199,6 +202,7 @@ beforeAll(async () => {
   redis = createRedisConnection(TEST_REDIS_URL);
   queue = createSearchQueue(redis, QUEUE_PREFIX);
   matchQueue = createMatchQueue(redis, QUEUE_PREFIX);
+  documentsQueue = createDocumentsQueue(redis, QUEUE_PREFIX);
   maintenanceQueue = createMaintenanceQueue(redis, QUEUE_PREFIX);
   const storage = new LocalStorageAdapter(storageDir);
   app = await buildApp({
@@ -209,6 +213,7 @@ beforeAll(async () => {
     storage,
     searchQueue: queue,
     matchQueue,
+    documentsQueue,
     maintenanceQueue,
   });
   await app.ready();
@@ -218,6 +223,7 @@ afterAll(async () => {
   await app.close();
   await queue.close();
   await matchQueue.close();
+  await documentsQueue.close();
   await maintenanceQueue.close();
   await redis.quit();
   await runtime.close();
@@ -808,5 +814,284 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     const sourceRows = (sourcesResponse.json() as { items: Array<{ key: string; policyNotes: string | null }> }).items;
     const remoteok = sourceRows.find((row) => row.key === 'remoteok');
     expect(remoteok?.policyNotes).toContain('reviewed:');
+  }, 90_000);
+
+  it('prepares a Phase 4 application: documents, claims, answers, timeline, archive (no submit)', async () => {
+    await login();
+
+    // 1. Candidate with structured facts (skill years are the only valid source
+    //    for a skill-specific years claim).
+    await app.inject({
+      method: 'PUT',
+      url: '/v1/profile',
+      headers: withCookie(),
+      payload: {
+        fullName: 'Ada Lovelace',
+        email: 'ada@example.com',
+        headline: 'Software Engineer',
+        remotePreference: ['remote'],
+        employmentTypes: ['full_time'],
+        allowedCountries: ['Spain'],
+        relocation: false,
+      },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/v1/profile/skills',
+      headers: withCookie(),
+      payload: { skillName: 'React', level: 'expert', years: 5 },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/v1/profile/experiences',
+      headers: withCookie(),
+      payload: {
+        company: 'Acme Corp',
+        title: 'Senior Developer',
+        startDate: '2018-01-01',
+        endDate: '2024-01-01',
+        description: 'Built internal tools',
+        skills: ['React'],
+      },
+    });
+    const resumeResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/resumes',
+      headers: withCookie(),
+      payload: { name: 'Engineering CV', category: 'software-engineering', isDefault: true },
+    });
+    const resumeId = (resumeResponse.json() as { id: string }).id;
+    const file = multipart('cv-v1.txt', 'CV version one');
+    await app.inject({
+      method: 'POST',
+      url: `/v1/resumes/${resumeId}/versions`,
+      headers: withCookie({ 'content-type': file.contentType }),
+      payload: file.payload,
+    });
+
+    // 2. Mock discovery → matching.
+    const configResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/search-configs',
+      headers: withCookie(),
+      payload: { name: 'Mock search', sources: ['mock'], keywords: [], intervalMinutes: 60 },
+    });
+    const configId = (configResponse.json() as { id: string }).id;
+    await app.inject({
+      method: 'POST',
+      url: `/v1/search-configs/${configId}/run`,
+      headers: withCookie(),
+    });
+    const runDeadline = Date.now() + 30_000;
+    let runStatus = 'running';
+    while (Date.now() < runDeadline && runStatus === 'running') {
+      const runs = await app.inject({
+        method: 'GET',
+        url: '/v1/search-runs?limit=1',
+        headers: withCookie(),
+      });
+      runStatus = (runs.json() as { items: Array<{ status: string }> }).items[0]?.status ?? 'running';
+      if (runStatus === 'running') await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+    expect(runStatus).toBe('completed');
+
+    await app.inject({ method: 'POST', url: '/v1/matches/recompute', headers: withCookie(), payload: {} });
+    const matchDeadline = Date.now() + 30_000;
+    let match: { match: { id: string; recommendedResumeId: string | null } } | null = null;
+    while (Date.now() < matchDeadline) {
+      const matches = await app.inject({
+        method: 'GET',
+        url: '/v1/matches?limit=100',
+        headers: withCookie(),
+      });
+      const items = (matches.json() as { items: Array<{ match: { id: string; recommendedResumeId: string | null } }> }).items;
+      match = items.find((item) => item.match.recommendedResumeId !== null) ?? null;
+      if (match) break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+    }
+    expect(match).not.toBeNull();
+
+    // 3. Create from match: idempotent, frozen score, AUTO denied.
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/applications',
+      headers: withCookie(),
+      payload: { matchId: match!.match.id, mode: 'assisted' },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json() as {
+      application: { id: string; status: string; scoreAtCreation: number; preparationSnapshot: unknown };
+      created: boolean;
+    };
+    expect(created.created).toBe(true);
+    expect(created.application.status).toBe('SHORTLISTED');
+    expect(created.application.preparationSnapshot).toBeNull();
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/v1/applications',
+      headers: withCookie(),
+      payload: { matchId: match!.match.id, mode: 'assisted' },
+    });
+    expect(duplicate.statusCode).toBe(200);
+    expect((duplicate.json() as { application: { id: string } }).application.id).toBe(
+      created.application.id,
+    );
+
+    const auto = await app.inject({
+      method: 'POST',
+      url: '/v1/applications',
+      headers: withCookie(),
+      payload: { matchId: match!.match.id, mode: 'auto' },
+    });
+    expect(auto.statusCode).toBe(422);
+    expect((auto.json() as { code: string }).code).toBe('POLICY_DENIED');
+
+    // 4. Prepare (202 + worker) and poll the detail.
+    const prepareResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/prepare`,
+      headers: withCookie(),
+    });
+    expect(prepareResponse.statusCode).toBe(202);
+    expect((prepareResponse.json() as { queueJobId: string }).queueJobId).toContain(
+      'prepare-',
+    );
+
+    const prepareDeadline = Date.now() + 30_000;
+    type Phase4Detail = {
+      application: { status: string; preparationSnapshot: unknown; resumeVersionId: string | null };
+      documents: Array<{
+        id: string;
+        kind: string;
+        contentHash: string;
+        verification: { status: string };
+        claims: Array<{ claim: string; kind: string; verified: string; sourceRefs: unknown[] }>;
+        generatedBy: { provider: string; promptVersion: string };
+      }>;
+      answers: Array<{ id: string; approved: boolean }>;
+      events: Array<{ type: string; fromStatus: string | null; toStatus: string | null }>;
+      blockers: Array<{ code: string }>;
+    };
+    let detail: Phase4Detail | null = null;
+    while (Date.now() < prepareDeadline) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/v1/applications/${created.application.id}`,
+        headers: withCookie(),
+      });
+      const candidate = response.json() as Phase4Detail;
+      if (candidate.documents.length >= 2) {
+        detail = candidate;
+        break;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+    }
+    expect(detail).not.toBeNull();
+    expect(detail!.application.status).toBe('PREPARING');
+    expect(detail!.application.preparationSnapshot).toBeNull();
+    expect(detail!.application.resumeVersionId).not.toBeNull();
+    const kinds = detail!.documents.map((document) => document.kind).sort();
+    expect(kinds).toEqual(['cover_letter', 'resume_variant']);
+    const variant = detail!.documents.find((document) => document.kind === 'resume_variant')!;
+    expect(variant.verification.status).toBe('verified');
+    expect(variant.generatedBy.provider).toBe('deterministic');
+    expect(variant.claims.length).toBeGreaterThan(0);
+    expect(variant.claims.every((claim) => claim.verified === 'verified')).toBe(true);
+    expect(variant.claims[0]!.sourceRefs.length).toBeGreaterThan(0);
+    const timeline = detail!.events.map((event) => `${event.fromStatus}->${event.toStatus}`);
+    expect(timeline).toContain('SHORTLISTED->PREPARING');
+    expect(detail!.events.some((event) => event.type === 'application.documents_prepared')).toBe(true);
+    expect(detail!.blockers.some((blocker) => blocker.code === 'rejected_claims')).toBe(false);
+
+    // 5. Answers: user answer with a verified claim, then bank reuse.
+    const answerResponse = await app.inject({
+      method: 'PUT',
+      url: `/v1/applications/${created.application.id}/answers`,
+      headers: withCookie(),
+      payload: {
+        questionText: 'How many years of React do you have?',
+        answerText: 'Five years of React.',
+        approved: true,
+        claims: [
+          { claim: '5 years React', kind: 'years_experience', value: { years: 5, skill: 'React' } },
+        ],
+      },
+    });
+    expect(answerResponse.statusCode).toBe(201);
+    const answer = answerResponse.json() as {
+      id: string;
+      approved: boolean;
+      requiresHumanInput: boolean;
+      verification: { status: string };
+    };
+    expect(answer.approved).toBe(true);
+    expect(answer.requiresHumanInput).toBe(false);
+    expect(answer.verification.status).toBe('verified');
+
+    const resolved = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/answers/resolve`,
+      headers: withCookie(),
+      payload: { questionText: 'How many years of React do you have?' },
+    });
+    expect(resolved.statusCode).toBe(201);
+    expect((resolved.json() as { action: string }).action).toBe('reuse');
+
+    const answersList = await app.inject({
+      method: 'GET',
+      url: `/v1/applications/${created.application.id}/answers`,
+      headers: withCookie(),
+    });
+    expect((answersList.json() as { items: unknown[] }).items).toHaveLength(1);
+
+    // 6. No submit/reconcile endpoints exist in Phase 4; READY_FOR_REVIEW is unreachable.
+    const submit = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/submit`,
+      headers: withCookie(),
+      payload: {},
+    });
+    expect(submit.statusCode).toBe(404);
+    const reconcile = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/reconcile`,
+      headers: withCookie(),
+      payload: {},
+    });
+    expect(reconcile.statusCode).toBe(404);
+
+    const resolveHuman = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/resolve-human`,
+      headers: withCookie(),
+      payload: { reason: 'not waiting for human action' },
+    });
+    expect(resolveHuman.statusCode).toBe(409);
+
+    // 7. Archive is audited and the list reflects it.
+    const archived = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/archive`,
+      headers: withCookie(),
+      payload: { reason: 'E2E archive' },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect((archived.json() as { status: string }).status).toBe('ARCHIVED');
+    const audits = await createAuditRepo(handle.db).listForEntity('application', created.application.id);
+    expect(audits.some((entry) => entry.action === 'application.archived')).toBe(true);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/v1/applications?limit=10',
+      headers: withCookie(),
+    });
+    const listBody = list.json() as {
+      total: number;
+      items: Array<{ application: { status: string }; resumeName: string | null }>;
+    };
+    expect(listBody.total).toBe(1);
+    expect(listBody.items[0]!.application.status).toBe('ARCHIVED');
+    expect(listBody.items[0]!.resumeName).toBe('Engineering CV');
   }, 90_000);
 });

@@ -18,8 +18,11 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/multipart": "^9.0.3",
+    "@job-system/ai": "workspace:*",
+    "@job-system/application-engine": "workspace:*",
     "@job-system/core": "workspace:*",
     "@job-system/database": "workspace:*",
+    "@job-system/documents": "workspace:*",
     "@job-system/matching": "workspace:*",
     "@job-system/observability": "workspace:*",
     "@job-system/shared": "workspace:*",

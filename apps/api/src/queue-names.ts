@@ -2,4 +2,5 @@
 export const QUEUE_SEARCH = 'search';
 export const QUEUE_INGEST = 'ingest';
 export const QUEUE_MATCH = 'match';
+export const QUEUE_DOCUMENTS = 'documents';
 export const QUEUE_MAINTENANCE = 'maintenance';
