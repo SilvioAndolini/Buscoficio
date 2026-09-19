@@ -358,6 +358,31 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
         insert into application_answer (id, application_id, question_text, question_hash, answer_kind)
         values (${uuidv7()}, ${applicationRow!.id}, 'Are you authorized to work?', ${'q'.repeat(64)}, 'user')
       `);
+      // Legacy Phase 4.2 target: approved + verified flags with zero claims.
+      await stage5.db.execute(sql`
+        insert into application_answer (id, application_id, question_text, question_hash, answer_kind,
+          answer_text, approved, requires_human_input, verification)
+        values (${uuidv7()}, ${applicationRow!.id}, 'Tell us about your AWS experience', ${'r'.repeat(64)},
+          'user', 'I have 10 years of AWS experience and I am AWS Certified.', true, false,
+          ${JSON.stringify({ status: 'verified', failures: [] })}::jsonb)
+      `);
+      // Claimed answer: must never be touched by the 0011 sanitation.
+      await stage5.db.execute(sql`
+        insert into application_answer (id, application_id, question_text, question_hash, answer_kind,
+          answer_text, claims, approved, requires_human_input, verification)
+        values (${uuidv7()}, ${applicationRow!.id}, 'How many years of React do you have?', ${'s'.repeat(64)},
+          'user', 'Five years of React.',
+          ${JSON.stringify([
+            {
+              claim: '5 years React',
+              kind: 'years_experience',
+              value: { years: 5, skill: 'React' },
+              sourceRefs: [],
+              verified: 'verified',
+            },
+          ])}::jsonb, true, false,
+          ${JSON.stringify({ status: 'verified', failures: [] })}::jsonb)
+      `);
       await stage5.db.execute(sql`
         insert into application_document (id, application_id, kind, storage_key, content_hash, generated_by)
         values (${uuidv7()}, ${applicationRow!.id}, 'cover_letter',
@@ -373,7 +398,8 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       await stage5.pool.end();
     }
 
-    // Stage 6: apply 0010 (JSON array defaults + legacy `{}` normalization).
+    // Stage 6: apply 0010 (JSON array defaults + legacy `{}` normalization)
+    // and 0011 (Phase 4.2 claimless answer sanitation).
     await runMigrations(targetUrl);
   });
 
@@ -568,7 +594,7 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
     try {
       const answerResult = await db.execute(sql`
         select source_refs, claims, verification, answer_text, question_text
-        from application_answer limit 1
+        from application_answer where question_text = 'Are you authorized to work?'
       `);
       const answer = answerResult.rows[0] as {
         source_refs: unknown;
@@ -613,6 +639,61 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       for (const row of defaults.rows as Array<{ column_default: string }>) {
         expect(row.column_default).toContain('[]');
       }
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('0011 sanitizes legacy approved claimless answers and preserves claimed ones (Phase 4.2)', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      const claimlessResult = await db.execute(sql`
+        select approved, requires_human_input, verification, claims, answer_text
+        from application_answer where question_text = 'Tell us about your AWS experience'
+      `);
+      const claimless = claimlessResult.rows[0] as {
+        approved: boolean;
+        requires_human_input: boolean;
+        verification: { status: string; failures: unknown[]; reason?: string };
+        claims: unknown;
+        answer_text: string;
+      };
+      expect(claimless.approved).toBe(false);
+      expect(claimless.requires_human_input).toBe(true);
+      expect(claimless.claims).toEqual([]);
+      expect(claimless.verification.status).toBe('unverifiable');
+      expect(claimless.verification.failures).toEqual([]);
+      expect(claimless.verification.reason).toContain('Phase 4.2');
+      // The answer text is preserved: only its trust status changes.
+      expect(claimless.answer_text).toBe(
+        'I have 10 years of AWS experience and I am AWS Certified.',
+      );
+
+      // Answers with claims keep their historical validation untouched.
+      const claimedResult = await db.execute(sql`
+        select approved, requires_human_input, verification,
+               jsonb_array_length(claims) as claim_count
+        from application_answer where question_text = 'How many years of React do you have?'
+      `);
+      const claimed = claimedResult.rows[0] as {
+        approved: boolean;
+        requires_human_input: boolean;
+        verification: { status: string };
+        claim_count: number;
+      };
+      expect(claimed.approved).toBe(true);
+      expect(claimed.requires_human_input).toBe(false);
+      expect(claimed.claim_count).toBe(1);
+      expect(claimed.verification.status).toBe('verified');
+
+      // Unapproved claimless rows are not rewritten (idempotent target state).
+      const untouchedResult = await db.execute(sql`
+        select approved, verification from application_answer
+        where question_text = 'Are you authorized to work?'
+      `);
+      const untouched = untouchedResult.rows[0] as { approved: boolean; verification: unknown };
+      expect(untouched.approved).toBe(false);
+      expect(untouched.verification).toEqual({});
     } finally {
       await pool.end();
     }
