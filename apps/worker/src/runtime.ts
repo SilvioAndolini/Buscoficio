@@ -1,9 +1,16 @@
 import { Worker, type Job, type WorkerOptions } from 'bullmq';
 import { embeddingApiKey, resolveEmbeddingRuntime, slugify, type Env } from '@job-system/shared';
 import { uuidv7 } from '@job-system/shared';
-import { systemClock, type HttpClient, type JobSourceAdapter } from '@job-system/core';
+import {
+  systemClock,
+  type HttpClient,
+  type JobSourceAdapter,
+  type StoragePort,
+  type TextGenerationPort,
+} from '@job-system/core';
 import {
   createAiUsageRepo,
+  createApplicationRepo,
   createCandidateRepo,
   createDb,
   createDedupRepo,
@@ -22,6 +29,7 @@ import {
 import { createEmbeddingProvider } from '@job-system/ai';
 import { ENGINE_VERSION } from '@job-system/matching';
 import { createJobLogger, type Logger } from '@job-system/observability';
+import { LocalStorageAdapter } from '@job-system/storage';
 import { WORKER_QUEUES, createQueues, createRedisConnection, type WorkerQueue } from './queues.js';
 import { createIngestService } from './services/ingest-service.js';
 import { createSearchService } from './services/search-service.js';
@@ -30,6 +38,7 @@ import { createTargetEnrichmentService } from './services/target-enrichment-serv
 import { createSchedulerService } from './services/scheduler-service.js';
 import { createReconciliationService } from './services/reconciliation-service.js';
 import { createMatchingService } from './services/matching-service.js';
+import { createApplicationService } from './services/application-service.js';
 import { createJobHandlers, type JobHandlers } from './handlers.js';
 
 export interface WorkerRuntimeOptions {
@@ -41,6 +50,10 @@ export interface WorkerRuntimeOptions {
   http?: HttpClient;
   /** Rate-limit window (tests use short windows). */
   rateLimitWindowMs?: number;
+  /** Override storage (tests use a temp directory). */
+  storage?: StoragePort;
+  /** Override the text provider (tests script mock responses). */
+  textProvider?: TextGenerationPort;
 }
 
 export interface WorkerRuntime {
@@ -66,6 +79,8 @@ export async function startWorkerRuntime(
   const candidateRepo = createCandidateRepo(db.db);
   const matchingRepo = createMatchingRepo(db.db);
   const aiUsageRepo = createAiUsageRepo(db.db);
+  const applicationRepo = createApplicationRepo(db.db, db.pool);
+  const storage: StoragePort = options.storage ?? new LocalStorageAdapter(env.STORAGE_LOCAL_DIR);
 
   // Phase 3.1: embeddings are configured independently from AI_PROVIDER.
   // resolveEmbeddingRuntime validates provider support, model presence and the
@@ -153,6 +168,15 @@ export async function startWorkerRuntime(
     clock: systemClock,
     logger,
   });
+  const applicationService = createApplicationService({
+    repo: applicationRepo,
+    aiUsageRepo,
+    storage,
+    clock: systemClock,
+    env,
+    logger,
+    ...(options.textProvider === undefined ? {} : { textProvider: options.textProvider }),
+  });
 
   const handlers = createJobHandlers({
     queues,
@@ -163,6 +187,7 @@ export async function startWorkerRuntime(
     dedupRepo,
     candidateRepo,
     matchingService,
+    applicationService,
     engineVersion: ENGINE_VERSION,
     logger,
   });

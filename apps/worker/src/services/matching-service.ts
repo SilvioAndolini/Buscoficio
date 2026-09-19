@@ -66,17 +66,23 @@ export function createMatchingService(deps: MatchingServiceDeps) {
     jobId: string | null,
     trace: TraceContext,
   ): Promise<void> {
-    await deps.aiUsageRepo.record({
-      provider: deps.embeddingProvider.provider,
-      model: deps.embeddingProvider.model,
-      operation: 'embed',
-      latencyMs,
-      cached: false,
-      jobId,
-      correlationId: trace.correlationId,
-      costEstimateUsd:
-        deps.embeddingProvider.provider === 'mock' ? '0.000000' : null,
-    });
+    try {
+      await deps.aiUsageRepo.record({
+        provider: deps.embeddingProvider.provider,
+        model: deps.embeddingProvider.model,
+        operation: 'embed',
+        latencyMs,
+        cached: false,
+        jobId,
+        correlationId: trace.correlationId,
+        costEstimateUsd:
+          deps.embeddingProvider.provider === 'mock' ? '0.000000' : null,
+      });
+    } catch (error) {
+      // Usage is observability, never the source of truth: a transient DB/FK
+      // failure must not abort a scoring run that already persisted its vectors.
+      deps.logger.warn({ jobId, err: error }, 'embedding usage record failed');
+    }
   }
 
   async function ensureJobEmbedding(

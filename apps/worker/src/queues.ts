@@ -9,17 +9,20 @@ export { ingestSourceJobId, matchJobId, searchRunJobId };
  *  - search: run orchestration + idempotent finalizer
  *  - ingest: per-source fan-out (writes only its own SearchSourceRun row)
  *  - match: deterministic scoring (Phase 3)
+ *  - documents: application document preparation (Phase 4)
  *  - maintenance: smoke/periodic jobs
  */
 export const QUEUE_SEARCH = 'search';
 export const QUEUE_INGEST = 'ingest';
 export const QUEUE_MATCH = 'match';
+export const QUEUE_DOCUMENTS = 'documents';
 export const QUEUE_MAINTENANCE = 'maintenance';
 export const QUEUE_DEDUP_REVIEW = 'dedup-review';
 export const WORKER_QUEUES = [
   QUEUE_SEARCH,
   QUEUE_INGEST,
   QUEUE_MATCH,
+  QUEUE_DOCUMENTS,
   QUEUE_MAINTENANCE,
   QUEUE_DEDUP_REVIEW,
 ] as const;
@@ -39,6 +42,7 @@ export function createQueues(connection: IORedis, prefix?: string): Record<Worke
     [QUEUE_SEARCH]: new Queue(QUEUE_SEARCH, { connection, ...options }),
     [QUEUE_INGEST]: new Queue(QUEUE_INGEST, { connection, ...options }),
     [QUEUE_MATCH]: new Queue(QUEUE_MATCH, { connection, ...options }),
+    [QUEUE_DOCUMENTS]: new Queue(QUEUE_DOCUMENTS, { connection, ...options }),
     [QUEUE_MAINTENANCE]: new Queue(QUEUE_MAINTENANCE, { connection, ...options }),
     [QUEUE_DEDUP_REVIEW]: new Queue(QUEUE_DEDUP_REVIEW, { connection, ...options }),
   };

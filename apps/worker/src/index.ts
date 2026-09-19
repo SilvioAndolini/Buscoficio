@@ -6,8 +6,10 @@ export {
   DEFAULT_JOB_OPTIONS,
   PHASE1_QUEUES,
   QUEUE_DEDUP_REVIEW,
+  QUEUE_DOCUMENTS,
   QUEUE_INGEST,
   QUEUE_MAINTENANCE,
+  QUEUE_MATCH,
   QUEUE_SEARCH,
   WORKER_QUEUES,
   createQueues,
@@ -31,3 +33,8 @@ export {
   createReconciliationService,
   type ReconciliationService,
 } from './services/reconciliation-service.js';
+export {
+  createApplicationService,
+  createUsageRecordingTextProvider,
+  type ApplicationService,
+} from './services/application-service.js';

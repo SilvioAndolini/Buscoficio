@@ -52,6 +52,8 @@ const testEnv: Env = {
   EMBEDDING_DIMENSIONS: 1536,
   EMBEDDING_SPACE_VERSION: 'v1',
   EMBEDDING_PROVIDER: 'mock',
+  APPLICATION_PREPARATION_POLICY_VERSION: 'application-prep-v1',
+  REAPPLICATION_COOLDOWN_DAYS: 30,
 };
 
 const logLines: string[] = [];

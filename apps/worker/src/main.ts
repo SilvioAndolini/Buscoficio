@@ -6,7 +6,7 @@ const env = loadEnv();
 const logger = createLogger({ level: env.LOG_LEVEL });
 
 const runtime = await startWorkerRuntime(env, logger);
-logger.info({ queues: ['search', 'ingest', 'maintenance'] }, 'worker ready');
+logger.info({ queues: ['search', 'ingest', 'match', 'documents', 'maintenance'] }, 'worker ready');
 
 let shuttingDown = false;
 

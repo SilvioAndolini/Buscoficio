@@ -5,6 +5,7 @@ import type { SearchService } from './services/search-service.js';
 import type { SchedulerService } from './services/scheduler-service.js';
 import type { ReconciliationService } from './services/reconciliation-service.js';
 import type { MatchingService } from './services/matching-service.js';
+import type { ApplicationService } from './services/application-service.js';
 import type { createCandidateRepo, createDedupRepo, createSearchRepo } from '@job-system/database';
 import type { WorkerQueue } from './queues.js';
 import { QUEUE_DEDUP_REVIEW, QUEUE_MATCH, ingestSourceJobId } from './queues.js';
@@ -18,6 +19,7 @@ export interface JobHandlerDeps {
   dedupRepo: ReturnType<typeof createDedupRepo>;
   candidateRepo: ReturnType<typeof createCandidateRepo>;
   matchingService: MatchingService;
+  applicationService: ApplicationService;
   /** Part of the deterministic BullMQ job id for matching (`match-<job>-<v>`). */
   engineVersion: string;
   logger: Logger;
@@ -159,6 +161,26 @@ export function createJobHandlers(deps: JobHandlerDeps) {
         },
         logger,
       );
+    },
+
+    'documents.prepare': async (job: Job, logger: Logger) => {
+      const applicationId = readString(job.data, 'applicationId');
+      const correlationId = readCorrelationId(job);
+      const result = await deps.applicationService.prepare(applicationId, {
+        correlationId,
+        applicationId,
+      });
+      logger.info(
+        {
+          applicationId,
+          status: result.status,
+          created: result.created,
+          documents: result.documents.length,
+          blockers: result.blockers.map((blocker) => blocker.code),
+        },
+        'application documents prepared',
+      );
+      return result;
     },
 
     'dedup.review.signal': async (job: Job, logger: Logger) => {
