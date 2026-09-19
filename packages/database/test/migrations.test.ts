@@ -101,6 +101,53 @@ describe.skipIf(!hasDatabase)('migrations from an empty database', () => {
       );
       expect((asOfColumn.rows as Array<{ is_nullable: string }>)[0]?.is_nullable).toBe('YES');
 
+      // Phase 4: application aggregate + constraints (A1 active partial unique).
+      for (const expected of [
+        'application',
+        'application_answer',
+        'application_document',
+        'application_event',
+      ]) {
+        expect(names).toContain(expected);
+      }
+      expect(indexNames).toContain('application_idempotency_key_uq');
+      expect(indexNames).toContain('application_active_job_candidate_uq');
+      expect(indexNames).toContain('application_answer_question_uq');
+      expect(indexNames).toContain('application_document_content_uq');
+      expect(indexNames).toContain('application_event_application_time_idx');
+      expect(indexNames).toContain('application_document_input_hash_idx');
+
+      const activeIndex = await db.execute(
+        sql`select indexdef from pg_indexes where indexname = 'application_active_job_candidate_uq'`,
+      );
+      const indexDef = (activeIndex.rows as Array<{ indexdef: string }>)[0]?.indexdef ?? '';
+      expect(indexDef).toContain('UNIQUE');
+      expect(indexDef).toContain('ARCHIVED');
+      expect(indexDef).toContain('REJECTED');
+
+      const snapshotColumn = await db.execute(
+        sql`select is_nullable from information_schema.columns where table_name = 'application' and column_name = 'preparation_snapshot'`,
+      );
+      expect((snapshotColumn.rows as Array<{ is_nullable: string }>)[0]?.is_nullable).toBe('YES');
+
+      const appFks = await db.execute(
+        sql`select conname, confdeltype from pg_constraint where conrelid = 'application'::regclass and contype = 'f'`,
+      );
+      const fkRows = appFks.rows as Array<{ conname: string; confdeltype: string }>;
+      expect(fkRows.find((row) => row.conname.includes('job_id'))?.confdeltype).toBe('r');
+      expect(fkRows.find((row) => row.conname.includes('match_id'))?.confdeltype).toBe('r');
+      expect(fkRows.find((row) => row.conname.includes('supersedes'))?.confdeltype).toBe('r');
+
+      const usageFk = await db.execute(
+        sql`select confdeltype from pg_constraint where conrelid = 'ai_usage'::regclass and conname like '%application_id%'`,
+      );
+      expect((usageFk.rows as Array<{ confdeltype: string }>)[0]?.confdeltype).toBe('n');
+
+      const decisionFk = await db.execute(
+        sql`select confdeltype from pg_constraint where conrelid = 'decision_log'::regclass and conname like '%application_id%'`,
+      );
+      expect((decisionFk.rows as Array<{ confdeltype: string }>)[0]?.confdeltype).toBe('n');
+
       const constraints = await db.execute(
         sql`select conname, confdeltype from pg_constraint where conrelid = 'resume_version'::regclass and contype = 'f'`,
       );
@@ -265,7 +312,8 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       await stage4.pool.end();
     }
 
-    // Stage 5: apply 0008 (temporal column + legacy embedding invalidation).
+    // Stage 5: apply 0008 (temporal column + legacy embedding invalidation) and
+    // 0009 (Phase 4 application aggregate).
     await runMigrations(targetUrl);
   });
 
@@ -404,6 +452,51 @@ Reviewed provider/platform terms for personal discovery.', '2026-09-18T10:00:00Z
       const sourceCounts = sources.rows[0] as { jobs: string; versions: string };
       expect(Number(sourceCounts.jobs)).toBeGreaterThan(0);
       expect(Number(sourceCounts.versions)).toBeGreaterThan(0);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('0009 upgrades the Phase 3.1 database with the application aggregate (no data loss)', async () => {
+    const { db, pool } = createDb(targetUrl, { max: 1 });
+    try {
+      const tables = await db.execute(
+        sql`select tablename from pg_tables where schemaname = 'public' order by tablename`,
+      );
+      const names = (tables.rows as Array<{ tablename: string }>).map((row) => row.tablename);
+      expect(names).toContain('application');
+      expect(names).toContain('application_answer');
+      expect(names).toContain('application_document');
+      expect(names).toContain('application_event');
+
+      // Phase 3 history and source data are untouched.
+      const preserved = await db.execute(
+        sql`select
+              (select count(*) from job_match) as matches,
+              (select count(*) from job) as jobs,
+              (select count(*) from resume_version) as versions,
+              (select count(*) from embedding_space) as spaces,
+              (select count(*) from application) as applications`,
+      );
+      const counts = preserved.rows[0] as Record<string, string>;
+      expect(Number(counts.matches)).toBe(1);
+      expect(Number(counts.jobs)).toBeGreaterThan(0);
+      expect(Number(counts.versions)).toBeGreaterThan(0);
+      expect(Number(counts.spaces)).toBeGreaterThan(0);
+      expect(Number(counts.applications)).toBe(0);
+
+      const matchRow = await db.execute(
+        sql`select engine_version, matching_as_of_date from job_match limit 1`,
+      );
+      const row = matchRow.rows[0] as { engine_version: string; matching_as_of_date: string | null };
+      expect(row.engine_version).toBe('matching-v1');
+      expect(row.matching_as_of_date).toBeNull();
+
+      // Active partial unique enforces invariant A1.
+      const indexDef = await db.execute(
+        sql`select indexdef from pg_indexes where indexname = 'application_active_job_candidate_uq'`,
+      );
+      expect((indexDef.rows as Array<{ indexdef: string }>)[0]?.indexdef).toContain('UNIQUE');
     } finally {
       await pool.end();
     }

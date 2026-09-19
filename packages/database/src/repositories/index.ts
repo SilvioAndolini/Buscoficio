@@ -18,3 +18,25 @@ export {
   type UpsertMatchData,
 } from './matching-repo.js';
 export { createAiUsageRepo, type AiUsageEntry, type AiUsageRepo } from './ai-usage-repo.js';
+export {
+  createApplicationRepo,
+  createApplicationRepositoryPort,
+  loadProfileFactsSource,
+  type AppendAuditData,
+  type AppendEventData,
+  type ApplicationAnswerData,
+  type ApplicationDocumentData,
+  type ApplicationEventData,
+  type ApplicationRecordData,
+  type ApplicationRepo,
+  type ApplicationWithJob,
+  type CreateApplicationData,
+  type CreateTailoredVersionData,
+  type InsertDocumentData,
+  type MatchCreationContextData,
+  type ResumeVersionData,
+  type TargetData,
+  type TransitionApplicationData,
+  type UpsertAnswerData,
+} from './application-repo.js';
+export { createDecisionLogRepo, type DecisionLogEntry } from './decision-log-repo.js';

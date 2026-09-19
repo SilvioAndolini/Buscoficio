@@ -468,7 +468,7 @@ export const decisionLog = pgTable(
     confidence: numeric('confidence', { precision: 5, scale: 4 }),
     threshold: numeric('threshold', { precision: 5, scale: 4 }),
     outcome: text('outcome').notNull().default('pending'),
-    applicationId: uuid('application_id'),
+    applicationId: uuid('application_id').references(() => application.id, { onDelete: 'set null' }),
     automationRunId: uuid('automation_run_id'),
     correlationId: text('correlation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -638,12 +638,148 @@ export const aiUsage = pgTable(
     confidence: numeric('confidence', { precision: 5, scale: 4 }),
     latencyMs: integer('latency_ms').notNull(),
     cached: boolean('cached').notNull().default(false),
-    applicationId: uuid('application_id'),
+    applicationId: uuid('application_id').references(() => application.id, { onDelete: 'set null' }),
     jobId: uuid('job_id').references(() => job.id, { onDelete: 'set null' }),
     correlationId: text('correlation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('ai_usage_operation_created_idx').on(table.operation, table.createdAt)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Application (Phase 4)                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Application root (doc 04 §2.6). The partial unique `(candidate_id, job_id)
+ * WHERE status NOT IN ('ARCHIVED','REJECTED')` is the definitive defense of
+ * invariant A1; `preparation_snapshot` stays NULL until Phase 5.
+ */
+export const application = pgTable(
+  'application',
+  {
+    id: uuid('id').primaryKey(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => job.id, { onDelete: 'restrict' }),
+    candidateId: uuid('candidate_id')
+      .notNull()
+      .references(() => candidateProfile.id, { onDelete: 'restrict' }),
+    applicationTargetId: uuid('application_target_id').references(() => applicationTarget.id, {
+      onDelete: 'restrict',
+    }),
+    discoverySourceId: uuid('discovery_source_id').references(() => jobSource.id, {
+      onDelete: 'restrict',
+    }),
+    matchId: uuid('match_id')
+      .notNull()
+      .references(() => jobMatch.id, { onDelete: 'restrict' }),
+    mode: text('mode').notNull(),
+    status: text('status').notNull().default('DISCOVERED'),
+    resumeVersionId: uuid('resume_version_id').references(() => resumeVersion.id, {
+      onDelete: 'restrict',
+    }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    policyVersion: text('policy_version').notNull(),
+    scoreAtCreation: numeric('score_at_creation', { precision: 5, scale: 4 }).notNull(),
+    preparationSnapshot: jsonb('preparation_snapshot'),
+    supersedesApplicationId: uuid('supersedes_application_id').references(
+      (): AnyPgColumn => application.id,
+      { onDelete: 'restrict' },
+    ),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    lastTransitionAt: timestamp('last_transition_at', { withTimezone: true }).notNull().defaultNow(),
+    requiresHumanReason: text('requires_human_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('application_idempotency_key_uq').on(table.idempotencyKey),
+    // Invariant A1: at most one active application per canonical Job.
+    uniqueIndex('application_active_job_candidate_uq')
+      .on(table.candidateId, table.jobId)
+      .where(sql`${table.status} NOT IN ('ARCHIVED', 'REJECTED')`),
+    index('application_status_transition_idx').on(table.status, table.lastTransitionAt),
+    index('application_job_idx').on(table.jobId),
+    index('application_target_idx').on(table.applicationTargetId),
+    index('application_candidate_status_idx').on(table.candidateId, table.status),
+  ],
+);
+
+export const applicationAnswer = pgTable(
+  'application_answer',
+  {
+    id: uuid('id').primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => application.id, { onDelete: 'cascade' }),
+    questionText: text('question_text').notNull(),
+    questionHash: text('question_hash').notNull(),
+    answerText: text('answer_text'),
+    answerKind: text('answer_kind').notNull(),
+    sourceRefs: jsonb('source_refs').notNull().default(emptyJson),
+    claims: jsonb('claims').notNull().default(emptyJson),
+    verification: jsonb('verification').notNull().default(emptyJson),
+    requiresHumanInput: boolean('requires_human_input').notNull().default(false),
+    approved: boolean('approved').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('application_answer_question_uq').on(table.applicationId, table.questionHash),
+    index('application_answer_question_hash_idx').on(table.questionHash),
+  ],
+);
+
+export const applicationDocument = pgTable(
+  'application_document',
+  {
+    id: uuid('id').primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => application.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    resumeVersionId: uuid('resume_version_id').references(() => resumeVersion.id, {
+      onDelete: 'restrict',
+    }),
+    storageKey: text('storage_key').notNull(),
+    contentHash: text('content_hash').notNull(),
+    claims: jsonb('claims').notNull().default(emptyJson),
+    verification: jsonb('verification').notNull().default(emptyJson),
+    generatedBy: jsonb('generated_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Append-only: same logical document (same bytes) is never duplicated.
+    uniqueIndex('application_document_content_uq').on(
+      table.applicationId,
+      table.kind,
+      table.contentHash,
+    ),
+    index('application_document_application_idx').on(table.applicationId),
+    // Preparation identity (inputHash) lives inside generated_by JSONB.
+    index('application_document_input_hash_idx').on(sql`(${table.generatedBy}->>'inputHash')`),
+  ],
+);
+
+export const applicationEvent = pgTable(
+  'application_event',
+  {
+    id: uuid('id').primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => application.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    fromStatus: text('from_status'),
+    toStatus: text('to_status'),
+    actor: text('actor').notNull(),
+    payload: jsonb('payload').notNull().default(emptyJson),
+    correlationId: text('correlation_id'),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('application_event_application_time_idx').on(table.applicationId, table.occurredAt),
+  ],
 );
 
 /* ------------------------------------------------------------------ */
@@ -672,3 +808,7 @@ export type ResumeEmbeddingRow = typeof resumeEmbedding.$inferSelect;
 export type EmbeddingSpaceRow = typeof embeddingSpace.$inferSelect;
 export type AiUsageRow = typeof aiUsage.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
+export type ApplicationRow = typeof application.$inferSelect;
+export type ApplicationAnswerRow = typeof applicationAnswer.$inferSelect;
+export type ApplicationDocumentRow = typeof applicationDocument.$inferSelect;
+export type ApplicationEventRow = typeof applicationEvent.$inferSelect;

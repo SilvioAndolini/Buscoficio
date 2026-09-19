@@ -9,6 +9,7 @@ export interface AiUsageEntry {
   latencyMs: number;
   cached: boolean;
   jobId?: string | null;
+  applicationId?: string | null;
   correlationId?: string | null;
   costEstimateUsd?: string | null;
   tokensIn?: number | null;
@@ -17,8 +18,9 @@ export interface AiUsageEntry {
 }
 
 /**
- * AI usage ledger (doc 04 §2.8). Phase 3 records embedding operations; costs
- * are only persisted when actually known (never invented).
+ * AI usage ledger (doc 04 §2.8). Phase 3 records embedding operations; Phase 4
+ * adds `cover_letter`/`answer` with `applicationId`. Costs are only persisted
+ * when actually known (never invented).
  */
 export function createAiUsageRepo(db: Db) {
   return {
@@ -33,6 +35,7 @@ export function createAiUsageRepo(db: Db) {
           latencyMs: entry.latencyMs,
           cached: entry.cached,
           jobId: entry.jobId ?? null,
+          applicationId: entry.applicationId ?? null,
           correlationId: entry.correlationId ?? null,
           costEstimateUsd: entry.costEstimateUsd ?? null,
           tokensIn: entry.tokensIn ?? null,
