@@ -1,7 +1,13 @@
 /**
- * Placeholder package (documents:phase-4).
- * Exists in Phase 1 to fix the approved repository layout and dependency
- * boundaries; functionality lands in its roadmap phase (docs/roadmap).
+ * `documents`: CV variants, cover letters, answers, claims and deterministic
+ * factual validation (Phase 4). Pure: no database, no AI SDKs, no apps.
+ * It consumes core ports (TextGenerationPort) injected by the composition root
+ * (architecture doc 11 §3).
  */
-export const PACKAGE_PHASE = "documents:phase-4" as const;
-
+export { resolveAnswer } from './answers.js';
+export { computeExperienceMonths, validateClaims } from './claims.js';
+export { CoverLetterOutputSchema, prepareCoverLetter } from './cover-letter.js';
+export { buildProfileFactsView } from './facts.js';
+export { canonicalQuestion, hashQuestion } from './question.js';
+export { prepareResumeVariant } from './resume-variant.js';
+export { createDocumentsService, type DocumentsServiceDeps } from './service.js';
