@@ -95,16 +95,36 @@ describe('answer bank resolution (Phase 4)', () => {
     expect(result.verification.status).toBe('unverifiable');
   });
 
-  it('reuses an answer without factual claims (verified vacuously)', () => {
+  it('claimless free-text answers fail closed and are never reused automatically (Phase 4.2)', () => {
     const result = resolveAnswer({
       questionText: 'When could you start?',
       priorApproved: priorAnswer([]),
       facts: buildFacts(),
       asOfDate,
     });
-    expect(result.action).toBe('reuse');
-    if (result.action !== 'reuse') throw new Error('unreachable');
-    expect(result.verification.status).toBe('verified');
-    expect(result.requiresHumanInput).toBe(false);
+    expect(result.action).toBe('stale');
+    if (result.action !== 'stale') throw new Error('unreachable');
+    expect(result.requiresHumanInput).toBe(true);
+    expect(result.verification.status).toBe('unverifiable');
+    expect(result.verification.reason).toContain('no structured claims');
+    expect(result.claims).toEqual([]);
+  });
+
+  it('never trusts legacy claimless flags: approved + verified + claims=[] is stale (§16)', () => {
+    const legacy = priorAnswer([]);
+    legacy.answerText = 'I have 10 years of AWS experience and I am AWS Certified.';
+    legacy.verification = { status: 'verified', failures: [] };
+    legacy.requiresHumanInput = false;
+    legacy.approved = true;
+    const result = resolveAnswer({
+      questionText: 'Tell us about your AWS experience',
+      priorApproved: legacy,
+      facts: buildFacts(),
+      asOfDate,
+    });
+    expect(result.action).toBe('stale');
+    if (result.action !== 'stale') throw new Error('unreachable');
+    expect(result.requiresHumanInput).toBe(true);
+    expect(result.verification.status).toBe('unverifiable');
   });
 });

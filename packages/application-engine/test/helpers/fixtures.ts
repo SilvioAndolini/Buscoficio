@@ -1,4 +1,6 @@
 import type {
+  Claim,
+  ClaimValidation,
   DocumentsPort,
   MatchCreationContext,
   ProfileFactsSource,
@@ -6,6 +8,13 @@ import type {
   StoragePort,
 } from '@job-system/core';
 import { sha256Hex } from '@job-system/core';
+
+function fakeValidateClaims(claims: Claim[]): ClaimValidation {
+  return {
+    claims: claims.map((claim) => ({ ...claim, verified: 'verified' as const })),
+    verification: { status: 'verified', failures: [] },
+  };
+}
 
 export const CANDIDATE_ID = '00000000-0000-4000-8000-000000000001';
 export const JOB_ID = '00000000-0000-4000-8000-000000000002';
@@ -101,10 +110,23 @@ export function buildFakeDocuments(overrides: Partial<DocumentsPort> = {}): Docu
   const base: DocumentsPort = {
     provider: 'mock',
     model: 'mock-text-v1',
-    validateClaims: (claims) => ({
-      claims: claims.map((claim) => ({ ...claim, verified: 'verified' as const })),
-      verification: { status: 'verified', failures: [] },
-    }),
+    validateClaims: (claims) => fakeValidateClaims(claims),
+    validateAnswerContent: (input) => {
+      if (input.claims.length === 0) {
+        return {
+          claims: [],
+          verification: {
+            status: 'unverifiable',
+            failures: [],
+            reason:
+              'Free-text answer contains no structured claims/evidence and cannot be automatically verified in Phase 4.',
+          },
+          requiresHumanInput: true,
+          automaticReuseAllowed: false,
+        };
+      }
+      return { ...fakeValidateClaims(input.claims), requiresHumanInput: false, automaticReuseAllowed: true };
+    },
     buildProfileFactsView: (source) => ({
       candidateId: source.profile.id,
       displayName: source.profile.fullName,

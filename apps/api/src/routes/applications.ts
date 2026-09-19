@@ -207,9 +207,10 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
   });
 
   /**
-   * User answers: `answerKind=user`. Answers without factual claims may be
-   * approved directly; answers with claims are validated deterministically
-   * before approval (task §72).
+   * User answers: `answerKind=user`. Every answer goes through the answer
+   * policy (Phase 4.2): claims are validated deterministically and a claimless
+   * free-text answer is `unverifiable`/human-only — the absence of claims can
+   * never be used to skip factual validation.
    */
   app.put('/v1/applications/:id/answers', async (request, reply) => {
     const { id } = parse(IdParamsSchema, request.params);
@@ -225,11 +226,12 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
     const source = await loadProfileFactsSource(ctx.db, application.candidateId);
     const facts = ctx.documents.buildProfileFactsView(source, { includeSalary: true });
     const hasOpenEnded = source.experiences.some((experience) => experience.endDate === null);
-    const validation = ctx.documents.validateClaims(body.claims.map(toProposedClaim), facts, {
+    const validation = ctx.documents.validateAnswerContent({
+      answerText: body.answerText,
+      claims: body.claims.map(toProposedClaim),
+      facts,
       asOfDate: hasOpenEnded ? utcDateOnly(now) : null,
     });
-    // Fail closed (Phase 4.1, P2): only a fully verified answer may be approved.
-    const fullyVerified = validation.verification.status === 'verified';
     const claims = validation.claims;
     const answer = await ctx.repos.applications.upsertAnswer({
       id: uuidv7(),
@@ -241,8 +243,8 @@ export function registerApplicationRoutes(app: FastifyInstance, ctx: ApiCtx): vo
       sourceRefs: claims.flatMap((claim) => claim.sourceRefs),
       claims,
       verification: validation.verification,
-      requiresHumanInput: !fullyVerified,
-      approved: body.approved && fullyVerified,
+      requiresHumanInput: validation.requiresHumanInput,
+      approved: body.approved && validation.automaticReuseAllowed,
       now,
     });
     await ctx.repos.audit.append({

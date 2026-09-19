@@ -1,4 +1,5 @@
 import type {
+  AnswerValidation,
   Claim,
   ClaimFailure,
   ClaimValidation,
@@ -74,6 +75,15 @@ export interface ResolveAnswerInput {
   asOfDate: Date | null;
 }
 
+/** Free-text answer + declared claims to be validated deterministically. */
+export interface AnswerContentInput {
+  answerText: string | null;
+  claims: Claim[];
+  facts: ProfileFactsView;
+  /** Explicit temporal anchor; null when every experience range is closed. */
+  asOfDate: Date | null;
+}
+
 export type ResolveAnswerResult =
   | {
       action: 'reuse' | 'stale';
@@ -110,6 +120,13 @@ export interface DocumentsPort {
     facts: ProfileFactsView,
     options: { asOfDate: Date | null },
   ): ClaimValidation;
+
+  /**
+   * Answer-specific policy (Phase 4.2): applies `validateClaims` when claims
+   * exist; a claimless free-text answer is always `unverifiable`, requires
+   * human input and can never be reused automatically.
+   */
+  validateAnswerContent(input: AnswerContentInput): AnswerValidation;
 
   /** PII-minimized facts view; salary only when explicitly requested. */
   buildProfileFactsView(

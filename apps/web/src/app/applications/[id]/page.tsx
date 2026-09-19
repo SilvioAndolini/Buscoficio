@@ -22,6 +22,7 @@ interface ClaimDto {
 interface VerificationDto {
   status: 'verified' | 'unverifiable' | 'rejected';
   failures: Array<{ claim: string; kind: string; reason: string }>;
+  reason?: string;
 }
 
 interface DocumentDto {
@@ -381,6 +382,18 @@ function ApplicationDetailContent(): ReactNode {
                 entrada humana: {answer.requiresHumanInput ? 'sí' : 'no'} · verificación{' '}
                 {answer.verification.status}
               </p>
+              {answer.verification.status === 'verified' && answer.claims.length > 0 ? (
+                <p className="success">Verified</p>
+              ) : (
+                <p className="error">
+                  Needs review
+                  {answer.verification.reason
+                    ? `: ${answer.verification.reason}`
+                    : answer.claims.length === 0
+                      ? ': Free-text answer has no structured factual evidence.'
+                      : ''}
+                </p>
+              )}
               <ClaimTable claims={answer.claims} verification={answer.verification} />
             </div>
           ))

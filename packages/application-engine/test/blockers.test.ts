@@ -68,6 +68,33 @@ describe('derivePreparationBlockers (Phase 4.1, P5)', () => {
     expect(blockers.every((blocker) => blocker.refId !== 'a3')).toBe(true);
   });
 
+  it('reports claimless free-text answers as human blockers (Phase 4.2 §25)', () => {
+    const blockers = derivePreparationBlockers({
+      ...base,
+      answers: [
+        {
+          id: 'claimless',
+          questionText: 'Tell us about your AWS experience',
+          requiresHumanInput: true,
+          claims: [],
+          verification: {
+            status: 'unverifiable',
+            failures: [],
+            reason: 'Free-text answer contains no structured claims/evidence and cannot be automatically verified in Phase 4.',
+          },
+        },
+      ],
+    });
+    expect(blockers).toEqual([
+      {
+        code: 'stale_answer',
+        message: 'Answer requires human input: "Tell us about your AWS experience"',
+        refId: 'claimless',
+      },
+    ]);
+    expect(blockersRequireHumanInput(blockers)).toBe(true);
+  });
+
   it('keeps target_blocked informational (does not require human input)', () => {
     const blockers = derivePreparationBlockers({ ...base, targetStatus: 'blocked' });
     expect(blockers).toEqual([

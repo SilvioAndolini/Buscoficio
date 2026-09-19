@@ -119,6 +119,12 @@ export type ClaimFailure = z.infer<typeof ClaimFailureSchema>;
 export const VerificationResultSchema = z.object({
   status: VerificationStatusSchema,
   failures: z.array(ClaimFailureSchema).default([]),
+  /**
+   * Global reason for a status that is not derived from a per-claim failure
+   * (Phase 4.2: claimless free-text answers are unverifiable). Optional so
+   * historical rows remain valid.
+   */
+  reason: z.string().min(1).optional(),
 });
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 
@@ -126,6 +132,16 @@ export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 export interface ClaimValidation {
   claims: Claim[];
   verification: VerificationResult;
+}
+
+/**
+ * Answer-specific factual policy (Phase 4.2): a free-text answer with zero
+ * structured claims is `unverifiable` and human-only. Absence of claims must
+ * never be a way to avoid factual validation.
+ */
+export interface AnswerValidation extends ClaimValidation {
+  requiresHumanInput: boolean;
+  automaticReuseAllowed: boolean;
 }
 
 /* ------------------------------------------------------------------ */

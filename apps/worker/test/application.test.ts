@@ -621,6 +621,55 @@ describeIntegration('application preparation integration (Phase 4)', () => {
     expect(resolved.answer.verification.status).toBe('unverifiable');
   });
 
+  it('Phase 4.2: a legacy approved claimless answer is never reused from the bank', async () => {
+    const scenario = await seedCandidate();
+    const first = await seedMatchedJob(scenario, 'Claimless First');
+    const second = await seedMatchedJob(scenario, 'Claimless Second');
+    const service = buildService();
+    const repo = createApplicationRepo(handle.db, handle.pool);
+
+    const applicationA = await service.createFromMatch(
+      { matchId: first.matchId, mode: 'assisted' },
+      trace(),
+    );
+    // Legacy row: approved + verified flags with zero structured claims. The
+    // service must never trust those flags (policy is re-applied on resolve).
+    await repo.upsertAnswer({
+      id: uuidv7(),
+      applicationId: applicationA.application.id,
+      questionText: 'Tell us about your AWS experience',
+      questionHash: hashQuestion('Tell us about your AWS experience'),
+      answerText: 'I have 10 years of AWS experience and I am AWS Certified.',
+      answerKind: 'user',
+      sourceRefs: [],
+      claims: [],
+      verification: { status: 'verified', failures: [] },
+      requiresHumanInput: false,
+      approved: true,
+      now: clock.now(),
+    });
+
+    const applicationB = await service.createFromMatch(
+      { matchId: second.matchId, mode: 'assisted' },
+      trace(),
+    );
+    const resolved = await service.resolveQuestion(
+      applicationB.application.id,
+      'Tell us about your AWS experience',
+      trace(applicationB.application.id),
+    );
+    expect(resolved.action).toBe('stale');
+    if (resolved.action !== 'stale') throw new Error('unreachable');
+    expect(resolved.answer.approved).toBe(false);
+    expect(resolved.answer.requiresHumanInput).toBe(true);
+    expect(resolved.answer.verification.status).toBe('unverifiable');
+    expect(resolved.answer.verification.reason).toContain('no structured claims');
+    expect(resolved.answer.claims).toEqual([]);
+    expect(resolved.answer.answerText).toBe(
+      'I have 10 years of AWS experience and I am AWS Certified.',
+    );
+  });
+
   it('P5: repeated preparation reports the same persisted blockers (cache hit)', async () => {
     const scenario = await seedCandidate();
     const { matchId } = await seedMatchedJob(scenario, 'Blocker Replay Job');

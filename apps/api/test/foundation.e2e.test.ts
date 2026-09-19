@@ -1078,6 +1078,58 @@ describeE2e('Phase 1 foundation E2E (API + worker + Postgres + Redis)', () => {
     );
     expect(blockerCodes).toContain('stale_answer');
 
+    // Phase 4.2: claimless free-text answers fail closed. Even with
+    // approved=true from the client, absence of structured claims can never
+    // bypass factual validation.
+    const claimlessAnswer = await app.inject({
+      method: 'PUT',
+      url: `/v1/applications/${created.application.id}/answers`,
+      headers: withCookie(),
+      payload: {
+        questionText: 'Tell us about your AWS experience',
+        answerText: 'I have 10 years of AWS experience and I am AWS Certified.',
+        approved: true,
+        claims: [],
+      },
+    });
+    expect(claimlessAnswer.statusCode).toBe(201);
+    const claimless = claimlessAnswer.json() as {
+      approved: boolean;
+      requiresHumanInput: boolean;
+      claims: unknown[];
+      verification: { status: string; reason?: string };
+    };
+    expect(claimless.approved).toBe(false);
+    expect(claimless.requiresHumanInput).toBe(true);
+    expect(claimless.claims).toEqual([]);
+    expect(claimless.verification.status).toBe('unverifiable');
+    expect(claimless.verification.reason).toContain('no structured claims');
+
+    const detailWithClaimless = await app.inject({
+      method: 'GET',
+      url: `/v1/applications/${created.application.id}`,
+      headers: withCookie(),
+    });
+    const claimlessBlockers = (
+      detailWithClaimless.json() as { blockers: Array<{ code: string; message: string }> }
+    ).blockers;
+    expect(
+      claimlessBlockers.some(
+        (blocker) => blocker.code === 'stale_answer' && blocker.message.includes('AWS'),
+      ),
+    ).toBe(true);
+
+    // Answer bank: a claimless answer is never reusable, not even on the same
+    // question (the stored row is not approved, so resolution requires a human).
+    const claimlessResolve = await app.inject({
+      method: 'POST',
+      url: `/v1/applications/${created.application.id}/answers/resolve`,
+      headers: withCookie(),
+      payload: { questionText: 'Tell us about your AWS experience' },
+    });
+    expect(claimlessResolve.statusCode).toBe(200);
+    expect((claimlessResolve.json() as { action: string }).action).toBe('requires_human');
+
     // 6. No submit/reconcile endpoints exist in Phase 4; READY_FOR_REVIEW is unreachable.
     const submit = await app.inject({
       method: 'POST',

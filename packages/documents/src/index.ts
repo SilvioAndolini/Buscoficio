@@ -5,6 +5,7 @@
  * (architecture doc 11 §3).
  */
 export { resolveAnswer } from './answers.js';
+export { CLAIMLESS_ANSWER_REASON, validateAnswerContent } from './answer-content.js';
 export { computeExperienceMonths, validateClaims } from './claims.js';
 export { CoverLetterOutputSchema, prepareCoverLetter } from './cover-letter.js';
 export { buildProfileFactsView } from './facts.js';
